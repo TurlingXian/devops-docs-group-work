@@ -44,6 +44,7 @@ struct ls_entry{
     char name[MAX_LEN + 1];
     unsigned char type;
     unsigned long size;
+    int is_hidden;
 };
 
 /**
@@ -66,6 +67,29 @@ int cmp(const void *p1, const void *p2){
     if (strcmp(ls_entry_2->name, "..") == 0) return 1;
 
     return strcmp(ls_entry_1->name, ls_entry_2->name);
+}
+
+/**
+ * Handler hidden file or directories.
+ * Using the d_name to catch.
+ * @param: struct ls_entry
+ * 
+ * @return: modifies the property of ls_entry
+ */
+void check_hidden(struct ls_entry *current_entry){
+    char e_name[MAX_LEN + 1];
+    unsigned long e_size = 0;
+
+    for ( int i = 0; current_entry->name[i] != '\0'; i++){
+        e_name[i] = current_entry->name[i];
+        e_size ++;
+    }
+
+    if (e_name[0] == '.' || (e_name[0] == '.' && e_name[1] == '.')){
+        // debug log
+        // printf("Hidden file or parent directories...\n");
+        (*current_entry).is_hidden = 1;
+    }
 }
 
 int main(int arc, char* argv[]){
@@ -91,6 +115,7 @@ int main(int arc, char* argv[]){
         strcpy(entries[size_of_entries].name, dir_read->d_name);
         entries[size_of_entries].size = dir_read->d_reclen;
         entries[size_of_entries].type = additional_dir_type_process(dir_read->d_type);
+        check_hidden(&entries[size_of_entries]);
         size_of_entries++;
     }
     // if the command readdir (read directory) from the dir_stream we open is not NULL
@@ -109,8 +134,11 @@ int main(int arc, char* argv[]){
 
     // normally, we should hide the "." and ".." or any directory begin with .
     // the most primitive of using "hidden"
-    for(int i = 2; i < size_of_entries; i++){
-        printf("%c\t%s\t%ld bytes\n", entries[i].type, entries[i].name, entries[i].size);
+    for(int i = 0; i < size_of_entries; i++){
+        if (entries[i].is_hidden != 1){
+            // printf("Will be printed...\n");
+            printf("%c\t%s\t\t\t%ld bytes\n", entries[i].type, entries[i].name, entries[i].size);
+        }
     }
 
     free(entries);
