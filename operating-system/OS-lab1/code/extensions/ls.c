@@ -107,7 +107,9 @@ int main(int arc, char* argv[]){
     // sort the whole result array
     qsort(entries, size_of_entries, sizeof(struct ls_entry), cmp);
 
-    for(int i = 0; i < size_of_entries; i++){
+    // normally, we should hide the "." and ".." or any directory begin with .
+    // the most primitive of using "hidden"
+    for(int i = 2; i < size_of_entries; i++){
         printf("%c\t%s\t%ld bytes\n", entries[i].type, entries[i].name, entries[i].size);
     }
 
