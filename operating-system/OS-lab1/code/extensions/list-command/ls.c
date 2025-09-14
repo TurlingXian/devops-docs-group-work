@@ -69,9 +69,10 @@ void check_hidden(struct ls_entry *current_entry);
  */
 void list(char argv[]);
 
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]){
+    // a pointer to point to the array of char pointer argv
     char** char_pointer = argv; // point to the beginning of this array
+    // parse the input to get arguments and directory
     int* parse_result = parse_arguments(argc, argv);
     // printf("The result of parsing the arguments: %d\n", parse_result);
     // // a pointer points to a directory
@@ -84,9 +85,12 @@ int main(int argc, char *argv[])
     // for (int i = 0; i < argc; i++){
     //     printf("i: %d, argv[i]: %s\n", i, argv[i]);
     // }
+    // extract the directory after parsing the arguments
     char_pointer += parse_result[1];
     char* res = *char_pointer;
-    printf("%s\n", res);
+    // printf("%s\n", res);
+    list(res);
+    free(parse_result);
     return 0;
 }
 
