@@ -143,14 +143,13 @@ int main(int argc, char *argv[])
 	int serverPort = kServerPort;
 
 	// did the user specify a port?
-	if (2 == argc)
-	{
+	if (2 == argc){
 		serverPort = atoi(argv[1]);
 	}
 
-#if VERBOSE
+	#if VERBOSE
 	printf("Attempting to bind to port %d\n", serverPort);
-#endif
+	#endif
 
 	// set up listening socket - see setup_server_socket() for details.
 	int listenfd = setup_server_socket(serverPort);
@@ -178,8 +177,7 @@ int main(int argc, char *argv[])
 		int maxfd = listenfd;
 
 		// register client sockets according to their state
-		for (auto &cd : connections)
-		{
+		for (auto &cd : connections){
 			if (cd.sock == -1)
 				continue;
 			if (cd.state == eConnStateReceiving)
@@ -190,16 +188,12 @@ int main(int argc, char *argv[])
 			{ // eConnStateSending
 				FD_SET(cd.sock, &writefds);
 			}
-			if (cd.sock > maxfd)
-				maxfd = cd.sock;
+
+			maxfd = std::max(maxfd, cd.sock);
 		}
 
-		// copy timeout (select may modify it)
-		struct timeval tv = connection_timeout;
-
-		int sret = select(maxfd + 1, &readfds, &writefds, NULL, &tv);
-		if (sret == -1)
-		{
+		int ret = select(maxfd + 1, &readfds, &writefds, NULL, &connection_timeout);
+		if (ret == -1){
 			if (errno == EINTR)
 				continue;
 			perror("select() failed");
@@ -207,75 +201,65 @@ int main(int argc, char *argv[])
 		}
 
 		// Accept new clients (if listenfd is readable)
-		if (FD_ISSET(listenfd, &readfds))
-		{
+		if (FD_ISSET(listenfd, &readfds)){
 			sockaddr_in clientAddr;
 			socklen_t addrSize = sizeof(clientAddr);
 			int clientfd = accept(listenfd, (sockaddr *)&clientAddr, &addrSize);
-			if (clientfd >= 0)
-			{
-				if (!set_socket_nonblocking(clientfd))
-				{
+			if (clientfd >= 0){
+				if (!set_socket_nonblocking(clientfd)){
 					close(clientfd);
 				}
-				else
-				{
+				else{
 					ConnectionData cd;
 					memset(&cd, 0, sizeof(cd));
 					cd.sock = clientfd;
 					cd.state = eConnStateReceiving;
 					connections.push_back(cd);
-#if VERBOSE
+				#if VERBOSE
 					char tmp[64];
 					printf("Accepted client %d (%s:%d)\n", clientfd,
 						   inet_ntop(AF_INET, &clientAddr.sin_addr, tmp, sizeof(tmp)),
 						   ntohs(clientAddr.sin_port));
-#endif
+				#endif
 				}
 			} // else accept failed; continue
 		}
 
 		// Process clients: use iterator so we can erase closed ones safely
-		for (auto it = connections.begin(); it != connections.end(); /* no ++ here */)
-		{
+		for (auto it = connections.begin(); it != connections.end();){
 			ConnectionData &cd = *it;
 			bool keep = true;
 
-			if (cd.sock == -1)
-			{
+			if (cd.sock == -1){
 				it = connections.erase(it);
 				continue;
 			}
 
 			// If socket is readable and expecting to receive
-			if (FD_ISSET(cd.sock, &readfds) && cd.state == eConnStateReceiving)
-			{
-#if VERBOSE
+			if (FD_ISSET(cd.sock, &readfds) && cd.state == eConnStateReceiving){
+			#if VERBOSE
 				printf("Socket %d readable -> process recv\n", cd.sock);
-#endif
+			#endif
 				keep = process_client_recv(cd);
 			}
 
 			// If still alive and writable and expecting to send
-			if (keep && FD_ISSET(cd.sock, &writefds) && cd.state == eConnStateSending)
-			{
-#if VERBOSE
+			if (keep && FD_ISSET(cd.sock, &writefds) && cd.state == eConnStateSending){
+			#if VERBOSE
 				printf("Socket %d writable -> process send\n", cd.sock);
-#endif
+			#endif
 				keep = process_client_send(cd);
 			}
 
-			if (!keep)
-			{
+			if (!keep){
 				// close and erase the connection (advance iterator properly)
-#if VERBOSE
+			#if VERBOSE
 				printf("Closing socket %d and removing connection\n", cd.sock);
-#endif
+			#endif
 				close(cd.sock);
 				it = connections.erase(it);
 			}
-			else
-			{
+			else{
 				++it;
 			}
 		} // end processing connections
