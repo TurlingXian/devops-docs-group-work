@@ -166,7 +166,7 @@ int main( int argc, char* argv[] )
 	// on the lab manual).
 
 	// set the timeout interval for connections
-	connection_timeout.tv_sec = 15;
+	connection_timeout.tv_sec = 5;
 	connection_timeout.tv_usec = 500000;
 
 	// loop forever
@@ -270,19 +270,33 @@ int main( int argc, char* argv[] )
 		// 2) If it is in the readfds set, receive data from that socket, using process_client_recv().
 		// 3) If it is in the writefds set, write send to that socket, using process_client_send().
 		// 4) Close and remove sockets if their connection was terminated.
-		for (auto it = connections.begin(); it != connections.end(); ++it ){
-			ConnectionData current_connection = *it;
+		for (auto it = connections.begin(); it != connections.end(); ){
+			ConnectionData &current_connection = *it;
 			bool processFurther = true;
-			while(processFurther){
-				if (FD_ISSET(current_connection.sock, &readfds) && current_connection.state == eConnStateReceiving){
+
+			if (current_connection.sock == -1){
+				// passed by reference, so the original object can be modified.
+				connections.erase(it);
+				continue;
+			}
+			
+			while (processFurther){
+				if(FD_ISSET(current_connection.sock, &readfds) && current_connection.state == eConnStateReceiving){
 					processFurther = process_client_recv(current_connection);
 				}
-				if (FD_ISSET(current_connection.sock, &writefds) && current_connection.state == eConnStateSending){
+				else if (FD_ISSET(current_connection.sock, &writefds) && current_connection.state == eConnStateSending){
 					processFurther = process_client_send(current_connection);
 				}
 
-				close(current_connection.sock);
+				if(!processFurther){
+					close(current_connection.sock);
+					it = connections.erase(it);
+				}
+				else{
+					++it;
+				}
 			}
+			
 		}
 	}
 
