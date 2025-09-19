@@ -1,3 +1,0 @@
-/home/huyhoang-ph/msc-cybersecurity/build/CMakeFiles/lsh.dir
-/home/huyhoang-ph/msc-cybersecurity/build/CMakeFiles/edit_cache.dir
-/home/huyhoang-ph/msc-cybersecurity/build/CMakeFiles/rebuild_cache.dir

@@ -68,7 +68,7 @@ int main(void)
       if (parse(line, &cmd) == 1)
       {
         // Just prints cmd
-        // print_cmd(&cmd);
+        print_cmd(&cmd);
         cmd_list[command_len] = cmd;
         command_len += 1;
       }
