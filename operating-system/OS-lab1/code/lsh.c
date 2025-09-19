@@ -29,16 +29,32 @@
 
 #include "parse.h"
 
+#define MAX_LEN 256
+
 static void print_cmd(Command *cmd);
 static void print_pgm(Pgm *p);
 void stripwhite(char *);
 
 int main(void)
 {
+  // test for detecting "PATH"
+  // const char* env_path;
+  // env_path = getenv("PATH");
+  // printf("PATH :%s\n", (env_path != NULL) ? env_path : "getenv returned NULL");
+  Command cmd_list[MAX_LEN + 1];
+  int command_len = 0;
+
   for (;;)
   {
     char *line;
     line = readline("> ");
+
+    // handle EOF - Ctrl + D signal
+    if(line == NULL){
+      printf("End of file - EOF detected, quit the program.\n");
+      free(line);
+      return 0;
+    }
 
     // Remove leading and trailing whitespace from the line
     stripwhite(line);
@@ -52,7 +68,9 @@ int main(void)
       if (parse(line, &cmd) == 1)
       {
         // Just prints cmd
-        print_cmd(&cmd);
+        // print_cmd(&cmd);
+        cmd_list[command_len] = cmd;
+        command_len += 1;
       }
       else
       {
@@ -61,6 +79,12 @@ int main(void)
     }
 
     // begin to process the command
+    // first if for built-in function like cd and exit
+    for(int i = 0; i < command_len; i++){
+      printf("%s \n", (*cmd_list[i].pgm->pgmlist));
+    }
+    // for exit function
+
     // Clear memory
     free(line);
   }

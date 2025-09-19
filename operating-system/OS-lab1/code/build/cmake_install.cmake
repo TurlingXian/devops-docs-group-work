@@ -1,4 +1,4 @@
-# Install script for directory: /home/huyhoang-ph/msc-cybersecurity/operating-system/OS-lab1/code
+# Install script for directory: /chalmers/users/huyhoang/devops-docs/operating-system/OS-lab1/code
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -50,5 +50,5 @@ endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
-file(WRITE "/home/huyhoang-ph/msc-cybersecurity/operating-system/OS-lab1/code/build/${CMAKE_INSTALL_MANIFEST}"
+file(WRITE "/chalmers/users/huyhoang/devops-docs/operating-system/OS-lab1/code/build/${CMAKE_INSTALL_MANIFEST}"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")

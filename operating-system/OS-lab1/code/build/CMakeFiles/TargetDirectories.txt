@@ -1,3 +1,3 @@
-/home/huyhoang-ph/msc-cybersecurity/operating-system/OS-lab1/code/build/CMakeFiles/lsh.dir
-/home/huyhoang-ph/msc-cybersecurity/operating-system/OS-lab1/code/build/CMakeFiles/edit_cache.dir
-/home/huyhoang-ph/msc-cybersecurity/operating-system/OS-lab1/code/build/CMakeFiles/rebuild_cache.dir
+/chalmers/users/huyhoang/devops-docs/operating-system/OS-lab1/code/build/CMakeFiles/lsh.dir
+/chalmers/users/huyhoang/devops-docs/operating-system/OS-lab1/code/build/CMakeFiles/edit_cache.dir
+/chalmers/users/huyhoang/devops-docs/operating-system/OS-lab1/code/build/CMakeFiles/rebuild_cache.dir
