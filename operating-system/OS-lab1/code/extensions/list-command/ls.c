@@ -121,7 +121,7 @@ int main(int argc, char *argv[]){
     }
 
     if(optind == argc){
-        printf("This program %s will print the content of current directory.\n", argv[0]);
+        // printf("This program %s will print the content of current directory.\n", argv[0]);
         list(NULL, arguments);
     }
     else{

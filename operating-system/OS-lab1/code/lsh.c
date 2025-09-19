@@ -83,7 +83,7 @@ int main(void)
     // begin to process the command
     Pgm *p = to_process.pgm;
     while (p != NULL){
-      printf("Current command to execute: %s\n", *(p->pgmlist));
+      // printf("Current command to execute: %s\n", *(p->pgmlist));
 
       // handle exit first
       if (strcmp(*(p->pgmlist), "exit") == 0){
@@ -115,7 +115,7 @@ int main(void)
         exit(EXIT_FAILURE);
       }
       else{
-        printf("Parent process, child PID = %d\n", pid);
+        // printf("Parent process, child PID = %d\n", pid);
         waitpid(pid, NULL, 0);
       }
 
