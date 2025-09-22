@@ -30,6 +30,7 @@
 // Allow the used of several system-related calls
 #include <sys/types.h>
 #include <sys/wait.h>
+#include<signal.h>
 
 #include "parse.h"
 
@@ -41,28 +42,81 @@ void stripwhite(char *);
 void cd_builtin(char *path);
 void exit_builtin(char* line);
 
-// define a process structure to keep tracking foreground, background and child processes
+pid_t fg_pid;
 
-struct job {
-    pid_t pid; // job id
-    char cmd[MAX_LEN + 1]; // the command of this job
-    int status; // 0: running, 1: stopped and 2: terminated (by the Crtl + C).
-    struct job* next; // pointer to the next job in the list (for the piped commands)
-};
+typedef struct job_t {
+  pid_t pid;
+  Pgm* pgm;
+  int status;
+} job;
 
-void create_new_job(struct job* parent, char* command){
-  
+job* job_table[MAX_LEN + 1];
+int job_count = 0;
+
+job* create_job(pid_t job_pid, Pgm* pgm){
+  if (job_count == MAX_LEN) {
+    printf("Job table full!\n");
+    return NULL;
+  }
+
+  job* new_job = malloc(sizeof(job));
+  if (!new_job) {
+    perror("malloc failed");
+    return NULL;
+  }
+
+  new_job->pid = job_pid;
+  new_job->pgm = pgm;
+  new_job->status = 0;
+
+  job_table[job_count++] = new_job;
+  return new_job;
+}
+
+void print_job(job *j) {
+    if (!j || !j->pgm) return;
+
+    printf("Job pid: %d, status: %d\n", j->pid, j->status);
+
+    Pgm *p = j->pgm;
+    print_pgm(p);
+}
+
+void signal_child_handler(int singal_number){
+  int child_status;
+  pid_t child_pid;
+
+  while ((child_pid = waitpid(-1, &child_status, WNOHANG)) > 0){ // child status get ok
+    for(int i = 0; i < job_count; i++){
+      if (job_table[i]->pid == child_pid){
+        job_table[i]->status = 2; // exit (success)
+        printf("\n[BG] Job is finished, pid: %d\n", child_pid);
+        break;
+      }
+    }
+  }
+}
+
+void foreground_sig_handler(int signal_number){
+    if (fg_pid > 0) {
+        kill(fg_pid, SIGINT);
+        printf("\n[FG] Process %d terminated by Ctrl+C\n", fg_pid);
+        fg_pid = 0;  // reset
+    } else {
+        printf("\n");  // no foreground job, just print newline
+        fflush(stdout); // make sure newline shows immediately
+    }
 }
 
 int main(void){ 
   // declare a command to process later, depended on background or not
   Command to_process;
+  signal(SIGCHLD, signal_child_handler);
+  signal(SIGINT, foreground_sig_handler);
 
-  struct job lsh_jobs; // the job list for this terminal session
-  lsh_jobs.pid = getpid();
-  strcpy(lsh_jobs.cmd, "./buid/lsh");
-  lsh_jobs.status = 0; // running
-  lsh_jobs.next = NULL;
+  // allocated the 0 position for this shell
+
+  // debug message
   
   for (;;){
     char *line;
@@ -128,9 +182,24 @@ int main(void){
           perror("lsh, exec failed");
         };
       }
+
       else{
-        // printf("Parent process, child PID = %d\n", pid);
-        waitpid(pid, NULL, 0);
+        // handle with parent, add the child to the list and tracking its progress
+        // should point to the BEGINNING of the array pgmlist
+        job* new_job = create_job(pid, p);
+        // debug
+        // print_job(new_job);
+        if(to_process.background == 1){
+          printf("[BG] Job started: pid=%d, cmd=", pid);
+          print_pgm(p);
+        }
+        else{
+          //foreground process
+          fg_pid = pid;
+          waitpid(pid, NULL, 0);
+          new_job->status=2; // and manually marked it as completed
+          // fg_pid = 0;
+        }
       }
 
       p = p->next;
@@ -140,6 +209,7 @@ int main(void){
     // Clear memory
     free(line);
   }
+  
   return 0;
 }
 
