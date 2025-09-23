@@ -41,271 +41,85 @@ static void print_cmd(Command *cmd);
 static void print_pgm(Pgm *p);
 void stripwhite(char *);
 void cd_builtin(char *path);
-void exit_builtin(char* line);
+void exit_builtin(char *line);
 
-pid_t fg_pid;
-
-typedef struct job_t {
-  pid_t pid;
-  Pgm* pgm;
-  int status;
-} job;
-
-job* job_table[MAX_LEN + 1];
-int job_count = 0;
-
-job* create_job(pid_t job_pid, Pgm* pgm){
-  if (job_count == MAX_LEN) {
-    printf("Job table full!\n");
-    return NULL;
-  }
-
-  job* new_job = malloc(sizeof(job));
-  if (!new_job) {
-    perror("malloc failed");
-    return NULL;
-  }
-
-  new_job->pid = job_pid;
-  new_job->pgm = pgm;
-  new_job->status = 0;
-
-  job_table[job_count++] = new_job;
-  return new_job;
-}
-
-void print_job(job *j) {
-    if (!j || !j->pgm) return;
-
-    printf("Job pid: %d, status: %d\n", j->pid, j->status);
-
-    Pgm *p = j->pgm;
-    print_pgm(p);
-}
-
-void signal_child_handler(){
-  int child_status;
-  pid_t child_pid;
-
-  while ((child_pid = waitpid(-1, &child_status, WNOHANG)) > 0){ // child status get ok
-    for(int i = 0; i < job_count; i++){
-      if (job_table[i]->pid == child_pid){
-        job_table[i]->status = 2; // exit (success)
-        printf("\n[BG] Job is finished, pid: %d\n", child_pid);
-        
-        rl_on_new_line();      // go to new line
-        rl_replace_line("", 0); // clear current input line
-        rl_redisplay();        // redisplay prompt
-        break;
-      }
-    }
-  }
-
-  fflush(stdout);
-}
-
-void foreground_sig_handler(){
-    if (fg_pid > 0) {
-        kill(fg_pid, SIGINT);
-        printf("\n[FG] Process %d terminated by Ctrl+C\n", fg_pid);
-        fg_pid = 0;  // reset
-    } 
-    else {
-        printf("\n");  // no foreground job, just print newline
-        fflush(stdout); // make sure newline shows immediately
-    }
-}
-
-// handle the main "shell"
-pid_t shell_pid;
-struct termios current_shell;
-int shell_terminal;
-int shell_interactive;
-
-void init_shell(){
-  // handler the shell and gives its own group pid
-  shell_terminal = STDIN_FILENO;
-  shell_interactive = isatty(shell_terminal);
-
-  if(shell_interactive){
-    while(tcgetpgrp(shell_terminal) != (shell_pid = getpgrp())){
-      kill(-shell_pid, SIGTTIN);
-    }
-  }
-
-  signal(SIGINT, SIG_IGN);
-  signal(SIGQUIT, SIG_IGN);
-  signal(SIGTSTP, SIG_IGN);
-  signal(SIGTTIN, SIG_IGN);
-  signal(SIGTTOU, SIG_IGN);
-
-  shell_pid = getpid();
-  if(setpgid(shell_pid, shell_pid) < 0){
-    perror("The shell could not be put in its own group");
-    exit(1);
-  }
-
-  tcsetpgrp(shell_terminal, shell_pid);
-
-  tcgetattr(shell_terminal, &current_shell);
-}
-
-int main(void){
-  // load the handler for child process and Ctrl + C case
-  signal(SIGCHLD, signal_child_handler);
-  signal(SIGINT, foreground_sig_handler);
-
-  init_shell();
-
-  for (;;){
-    char *line;
-    line = readline("> ");
+int main(void)
+{
+  for (;;)
+  {
+    char *line = readline("> ");
 
     // handle EOF - Ctrl + D signal
-    if(line == NULL){
+    if (line == NULL)
+    {
       exit_builtin(line);
     }
 
-    // Remove leading and trailing whitespace from the line
     stripwhite(line);
 
-    // declare a command to process later, depended on background or not
     Command to_process;
     memset(&to_process, 0, sizeof(Command));
 
-    // If stripped line not blank
-    if (*line){
+    if (*line)
+    {
       add_history(line);
 
       Command cmd;
-      if (parse(line, &cmd) == 1){
+      if (parse(line, &cmd) == 1)
+      {
         to_process = cmd;
       }
-      else{
+      else
+      {
         printf("Parse ERROR\n");
+        free(line);
+        continue;
       }
     }
 
     // begin to process the command
     Pgm *p = to_process.pgm;
-    int bg_flag = to_process.background;
-    // create the pipe
-    int fd[2];
-    int prev_fd = -1;
-    pid_t pipe_gid = 0;
 
-    while (p != NULL){
-      // handle exit first
-      if (strcmp(*(p->pgmlist), "exit") == 0){
-        printf("Invoked by built-in exit command.\n");
+    while (p != NULL)
+    {
+      if (strcmp(*(p->pgmlist), "exit") == 0)
+      {
         exit_builtin(line);
       }
 
-      if (strcmp(*(p->pgmlist), "cd") == 0) {
+      if (strcmp(*(p->pgmlist), "cd") == 0)
+      {
         cd_builtin(p->pgmlist[1]);
         p = p->next;
         continue;
       }
 
-      if (p->next) {
-        if (pipe(fd) < 0) {
-          perror("Pipe creation failed");
-          free(line);
-          return -1;
-        }
-      }
-    
       pid_t pid = fork();
-      
-      if (pid < 0){
+      if (pid < 0)
+      {
         perror("Fork failed");
         free(line);
-        return -1;
+        break;
       }
 
-      if(pid == 0){ // child
-        setpgid(0, pipe_gid ? pipe_gid : getpid()); // set the child to be the leader of its tree
-        if(prev_fd != -1){
-            dup2(prev_fd, STDIN_FILENO);
-            close(prev_fd);
-        }
+      if (pid == 0)
+      { // child
 
-        if(p->next){
-            dup2(fd[1], STDOUT_FILENO);
-            close(fd[0]);
-            close(fd[1]);
-        }
-
-        if(execvp(*(p->pgmlist), p->pgmlist) == -1){
-          perror("lsh, exec failed");
-          _exit(1);
-        }
+        execvp(*(p->pgmlist), p->pgmlist);
+        perror("lsh, exec failed");
+        _exit(1);
       }
 
-      else{
-        // handle with parent, add the child to the list and tracking its progress
-        // should point to the BEGINNING of the array pgmlist
-        setpgid(pid, pipe_gid ? pipe_gid : pid);
-        if(!pipe_gid)
-          pipe_gid = pid;
+      else
+      { // parent
+        int executionStatus;
 
-        job* new_job = create_job(pid, p);
-
-        if(to_process.background == 1){
-          printf("[BG] Job started: pid=%d, cmd=", pid);
-          print_pgm(p);
-        }
-        else{
-          tcsetpgrp(STDIN_FILENO, pipe_gid);
-        }
-        // else{ //foreground process
-        //   // print_pgm(p);
-          
-        //   tcsetpgrp(STDIN_FILENO, pipe_gid);
-        //   // set the group to, both FG and BG should be like that
-        //   int status;
-        //   pid_t wpid;
-          
-        //   while((wpid = waitpid(-pipe_gid, &status, WUNTRACED)) > 0){
-        //     if(WIFEXITED(status) || WIFSIGNALED(status)){
-        //       new_job->status = 2;
-        //     }
-        //     else if (WIFSTOPPED(status))
-        //       new_job->status = 1;
-        //   }
-          
-        //   tcsetpgrp(STDIN_FILENO, shell_pid);
-        // }
-        if (prev_fd != -1) close(prev_fd);
-        
-        if (p->next) {
-          close(fd[1]);
-          prev_fd = fd[0];
-        }
+        waitpid(pid, &executionStatus, 0);
       }
+
       p = p->next;
     }
 
-    // After pipeline: wait for foreground jobs
-    if (!bg_flag && pipe_gid != 0) {
-        int status;
-        pid_t wpid;
-        while ((wpid = waitpid(-pipe_gid, &status, WUNTRACED)) > 0) {
-            for (int i = 0; i < job_count; i++) {
-                if (job_table[i]->pid == wpid) {
-                    if (WIFEXITED(status) || WIFSIGNALED(status))
-                        job_table[i]->status = 2;
-                    else if (WIFSTOPPED(status))
-                        job_table[i]->status = 1;
-                    break;
-                }
-            }
-        }
-        tcsetpgrp(STDIN_FILENO, shell_pid);
-    }
-
-    // Close any remaining pipe ends
-    if (prev_fd != -1) close(prev_fd);
     free(line);
   }
   return 0;
@@ -355,7 +169,6 @@ static void print_pgm(Pgm *p)
   }
 }
 
-
 /* Strip whitespace from the start and end of a string.
  *
  * Helper function, no need to change.
@@ -390,28 +203,34 @@ void stripwhite(char *string)
  * @param path The target directory path.
  * @return void (the working directory is changed by chdir() command, can use getcwd() to verify)
  */
-void cd_builtin(char *path) {
-    // if no argument, go to home directory
-    // debug message to make sure this shell used the buitl-in, not the executable from PATH
-    // printf("Using the built-in cd command\n");
-    if (path == NULL) {
-      char *home_dir = getenv("HOME");
-      if (home_dir != NULL) {
-        if (chdir(home_dir) != 0) {
-          perror("chdir to HOME failed");
-        }
-      } 
-      else {
-        fprintf(stderr, "HOME environment variable not set.\n");
+void cd_builtin(char *path)
+{
+  // if no argument, go to home directory
+  // debug message to make sure this shell used the buitl-in, not the executable from PATH
+  // printf("Using the built-in cd command\n");
+  if (path == NULL)
+  {
+    char *home_dir = getenv("HOME");
+    if (home_dir != NULL)
+    {
+      if (chdir(home_dir) != 0)
+      {
+        perror("chdir to HOME failed");
       }
-    } 
-    
-    else {
-      // go to the passed directory
-          if (chdir(path) != 0)
-            perror("chdir failed");
+    }
+    else
+    {
+      fprintf(stderr, "HOME environment variable not set.\n");
     }
   }
+
+  else
+  {
+    // go to the passed directory
+    if (chdir(path) != 0)
+      perror("chdir failed");
+  }
+}
 
 /**
  * Exit handler for the built-in exit command.
@@ -419,7 +238,8 @@ void cd_builtin(char *path) {
  * @param: A character pointer to the output that the shell is currently handeling.
  * @return: void (the program will terminate in the main function after calling this)
  */
-void exit_builtin(char* line){ 
-    free(line);
-    exit(0);
-  }
+void exit_builtin(char *line)
+{
+  free(line);
+  exit(0);
+}
