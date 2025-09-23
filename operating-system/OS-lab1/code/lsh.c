@@ -43,8 +43,26 @@ void stripwhite(char *);
 void cd_builtin(char *path);
 void exit_builtin(char *line);
 
+void fg_handler();
+void child_handler();
+
+typedef struct t_job{
+  pid_t job_pid;
+} job;
+
+job background_jobs[MAX_LEN];
+int background_jobs_count;
+
+pid_t fg_pid;
+
+
+
 int main(void)
 {
+  background_jobs_count = 0;
+  signal(SIGINT, fg_handler);
+  signal(SIGCHLD, child_handler);
+
   for (;;)
   {
     char *line = readline("> ");
@@ -95,6 +113,7 @@ int main(void)
       }
 
       pid_t pid = fork();
+
       if (pid < 0)
       {
         perror("Fork failed");
@@ -102,19 +121,34 @@ int main(void)
         break;
       }
 
-      if (pid == 0)
-      { // child
+      if (pid == 0){ // child
 
         execvp(*(p->pgmlist), p->pgmlist);
         perror("lsh, exec failed");
         _exit(1);
       }
 
-      else
-      { // parent
-        int executionStatus;
+      else{ // parent
+        if(to_process.background == 1){
+          if(background_jobs_count > MAX_LEN){
+            perror("Allocated failed for new BG job.\n");
+            continue;
+          }
+          
+          job current_bg = {0};
+          current_bg.job_pid = pid;
 
-        waitpid(pid, &executionStatus, 0);
+          background_jobs[background_jobs_count] = current_bg; 
+          background_jobs_count += 1;
+
+          printf("[BG] Job started with pid %d, cmd= ", pid);
+          print_pgm(p);
+        }
+        else{
+          fg_pid = pid;
+          int execution_status;
+          waitpid(pid, &execution_status, 0);
+        }
       }
 
       p = p->next;
@@ -242,4 +276,40 @@ void exit_builtin(char *line)
 {
   free(line);
   exit(0);
+}
+
+void fg_handler(){
+  // printf("Caught signal for process %d\n", fg_pid);
+  if(fg_pid > 0){
+    kill(fg_pid, SIGINT);
+    printf("[FG] Process %d terminated by Ctrl+C.\n", fg_pid);
+    fg_pid = 0;
+  }
+  else{
+    printf("\n");
+    fflush(stdin);
+  }
+}
+
+void child_handler(){
+  int child_status;
+  pid_t child_pid;
+
+  while((child_pid = waitpid(-1, &child_status, WNOHANG)) > 0){
+    for(int i = 0; i < background_jobs_count; i++){
+      if(background_jobs[i].job_pid == child_pid){
+        for(int j = i; j < background_jobs_count - 1; j++){
+          background_jobs[j] = background_jobs[j + 1];
+        }
+        background_jobs_count -= 1;
+        break;
+      }
+    }
+    printf("\n[BG] Process %d finished.\n", child_pid);
+    fflush(stdin);
+
+    rl_on_new_line();
+    rl_replace_line("", 0);
+    rl_redisplay();
+  }
 }
