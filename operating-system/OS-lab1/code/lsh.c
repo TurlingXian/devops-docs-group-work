@@ -107,6 +107,7 @@ int main(void)
 
     // begin to process the command
     Pgm *p = to_process.pgm;
+    int fd_in = STDIN_FILENO;
 
     while (p != NULL)
     {
@@ -123,11 +124,10 @@ int main(void)
       }
 
       pid_t pid = fork();
-      int fds[2];
-      int fd_out;
+      int pipefds[2];
 
       if(p->next != NULL){
-        if(pipe(fds) == -1){
+        if(pipe(pipefds) == -1){
           perror("Pipe");
           _exit(1);
         }
@@ -141,9 +141,9 @@ int main(void)
       }
 
       if (pid == 0){ // child
-        if(fd_out != STDOUT_FILENO){
-          dup2(fd_out, STDOUT_FILENO);
-          close(fd_out);
+        if(fd_in != STDIN_FILENO){
+          dup2(fd_in, STDIN_FILENO);
+          close(fd_in);
         }
 
         if(to_process.rstdout && command_number == 0){
@@ -157,9 +157,9 @@ int main(void)
         }
 
         if(p->next != NULL){
-          dup2(fds[0], STDOUT_FILENO);
-          close(fds[0]);
-          close(fds[1]);
+          close(pipefds[0]);
+          dup2(pipefds[1], STDOUT_FILENO);
+          close(pipefds[1]);
         }
 
         if(to_process.rstdin && to_process.pgm->next !=  NULL){
@@ -178,35 +178,33 @@ int main(void)
       }
 
       else{ // parent
-        // close the write-end if not needed
-        if(fd_out != STDOUT_FILENO){
-          close(fd_out);
+        if(fd_in != STDIN_FILENO){
+          close(fd_in);
         }
 
+        // Set up for next iteration
         if(p->next != NULL){
-          close(fds[1]);
-          fd_out = fds[0];
+          close(pipefds[1]);  // Close write end in parent
+          fd_in = pipefds[0]; // Save read end for next command
         }
 
         if(to_process.background == 1){
           if(background_jobs_count > MAX_LEN){
-            perror("Allocated failed for new BG job.\n");
+            perror("Failed to allocated job.\n");
             continue;
           }
-          
-          job current_bg = {0};
-          current_bg.job_pid = pid;
 
-          background_jobs[background_jobs_count] = current_bg; 
+          job current_background = {0};
+          current_background.job_pid = pid;
+
+          background_jobs[background_jobs_count] = current_background;
           background_jobs_count += 1;
 
-          printf("[BG] Job started with pid %d, cmd= ", pid);
+          printf("[BG] Job started with pd %d, cmd= ", pid);
           print_pgm(p);
-
-          // check_job();
         }
+
         else{
-          // printf("Number of command in this chain: %d.\n", command_number);
           fg_pid = pid;
           int execution_status;
           waitpid(pid, &execution_status, 0);
