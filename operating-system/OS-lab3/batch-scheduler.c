@@ -64,8 +64,8 @@ void batch_scheduler (unsigned int num_priority_send,
                       unsigned int num_tasks_send,
                       unsigned int num_tasks_receive);
 
-void wait_for_a_slot(unsigned int *job_count, struct semaphore *sem);
-int select_from_waiting(struct semaphore *sem, unsigned int waiting);
+void wait_to_be_onboard(unsigned int *total_waiting_count, struct semaphore *sem);
+int wakeup_waiting_task(struct semaphore *sem, unsigned int waiting);
 
 /* Thread function for running a task: Gets a slot, transfers data and finally
  * releases slot */
@@ -83,16 +83,16 @@ static void release_slot (const task_t *task);
 
 static struct semaphore bus_slots;
 static struct semaphore mutex;
-static struct semaphore sender_semaphore;
-static struct semaphore receiver_semaphore;
-static struct semaphore sender_priority_semaphore;
-static struct semaphore receiver_priority_semaphore;
+static struct semaphore has_sender_semaphore;
+static struct semaphore has_receiver_semaphore;
+static struct semaphore has_sender_priority_semaphore;
+static struct semaphore has_receiver_priority_semaphore;
 
 static int bus_direction;
 static int task_on_bus;
 static int waiting_task;
 static int send_task;
-static int recv_task;
+static int receiver_task;
 static int send_priority_task;
 static int recv_priority_task;
 
@@ -104,16 +104,16 @@ void init_bus (void) {
      e.g. your condition variables, locks, counters etc */
   sema_init(&bus_slots, BUS_CAPACITY);
   sema_init(&mutex, 1);
-  sema_init(&sender_semaphore, 0);
-  sema_init(&receiver_semaphore, 0);
-  sema_init(&sender_priority_semaphore, 0);
-  sema_init(&receiver_priority_semaphore, 0);
+  sema_init(&has_sender_semaphore, 0);
+  sema_init(&has_receiver_semaphore, 0);
+  sema_init(&has_sender_priority_semaphore, 0);
+  sema_init(&has_receiver_priority_semaphore, 0);
 
   bus_direction = -1; // not started yet
   task_on_bus = 0;
   waiting_task = 0;
   send_task = 0;
-  recv_task = 0;
+  receiver_task = 0;
   send_priority_task = 0;
   recv_priority_task = 0;
 }
@@ -222,52 +222,56 @@ void get_slot (const task_t *task) {
    * feel free to schedule priority tasks of the same direction,
    * even if there are priority tasks of the other direction waiting
    */
-
-   // critical selection
-   sema_down(&mutex);
-
-   bool must_wait = false;
-
-   if (task_on_bus >= BUS_CAPACITY){
+  sema_down(&mutex);
+  bool must_wait = false;
+  if(task_on_bus >= BUS_CAPACITY){
     must_wait = true;
-   }
-   else if(bus_direction != -1 && bus_direction != task->direction){ // if the bus is going and going opposite direction
+  }
+  else if (bus_direction != -1 && bus_direction != task->direction){
     must_wait = true;
-   }
-   else if(task->priority == NORMAL){
-    // Normal tasks must wait for the priority ones
+  }
+  else if (task->priority == NORMAL){
+    /* code */
     if(task->direction == SEND && send_priority_task > 0){
       must_wait = true;
     }
-    else if(task->direction == RECEIVE && recv_priority_task > 0){
+    else if (task->direction == RECEIVE && recv_priority_task > 0){
+      /* code */
       must_wait = true;
     }
-   }
+  }
 
-   if(must_wait){
+  if(must_wait){
     if(task->priority == PRIORITY){
-      if(task->direction == SEND){
-        wait_for_a_slot(&send_priority_task, &sender_priority_semaphore);
+      if (task->direction == SEND)
+      {
+        /* code */
+        wait_to_be_onboard(&send_priority_task, &has_sender_priority_semaphore);
       }
-      else {
-        wait_for_a_slot(&recv_priority_task, &receiver_priority_semaphore);
-      }
-    }
-    else{
-      if(task->direction == SEND){
-        wait_for_a_slot(&send_task, &sender_semaphore);
-      }
-      else{
-        wait_for_a_slot(&recv_task, &receiver_semaphore);
+      else
+      {
+        wait_to_be_onboard(&recv_priority_task, &has_receiver_priority_semaphore);
       }
     }
-   }
+    else
+    {
+      if (task->direction == SEND)
+      {
+        /* code */
+        wait_to_be_onboard(&send_task, &has_sender_semaphore);
+      }
+      else
+      {
+        wait_to_be_onboard(&receiver_task, &has_receiver_semaphore);
+      }
+    }
+  }
   
-   sema_down(&bus_slots); // allow a task getting on bus
-   task_on_bus++;
-   bus_direction = task->direction;
+  sema_down(&bus_slots);
+  task_on_bus++;
 
-   sema_up(&mutex);
+  bus_direction = task->direction;
+  sema_up(&mutex);
 }
 
 void transfer_data (const task_t *task) {
@@ -284,30 +288,28 @@ void release_slot (const task_t *task) {
   // enter critical selection
   sema_down(&mutex);
   task_on_bus--;
+
   sema_up(&bus_slots);
-
   if(task_on_bus == 0){
-    bus_direction = -1;
+    bus_direction = -1; //idle
   }
 
   if(bus_direction != RECEIVE){
-    // try with priority first
-    int can_enter = select_from_waiting(&sender_priority_semaphore, send_priority_task);
-    if(send_priority_task == 0){
-      can_enter = select_from_waiting(&sender_semaphore, send_task);
-    }
-
-    if(can_enter > 0)
-      bus_direction = SEND;
-  }
-
-  if(bus_direction != RECEIVE){
-    int can_enter = select_from_waiting(&receiver_priority_semaphore, recv_priority_task);
+    int can_aboard = wakeup_waiting_task(&has_sender_priority_semaphore, send_priority_task);
     if(recv_priority_task == 0){
-      can_enter = select_from_waiting(&receiver_semaphore, recv_task);
+      can_aboard += wakeup_waiting_task(&has_sender_semaphore, send_task);
     }
+    if(can_aboard > 0){
+      bus_direction = SEND;
+    }
+  }
 
-    if(can_enter > 0){
+  if(bus_direction != SEND){
+    int can_aboard = wakeup_waiting_task(&has_receiver_priority_semaphore, recv_priority_task);
+    if(send_priority_task == 0){
+      can_aboard += wakeup_waiting_task(&has_receiver_semaphore, receiver_task);
+    }
+    if(can_aboard > 0){
       bus_direction = RECEIVE;
     }
   }
@@ -315,28 +317,32 @@ void release_slot (const task_t *task) {
   sema_up(&mutex);
 }
 
-/**
- * Put the tasks on waiting list because the bus is full
- */
-void wait_for_a_slot(unsigned int *job_count, struct semaphore *sem){
-  *job_count += 1;
-  sema_up(&mutex);
+void wait_to_be_onboard(unsigned int *total_waiting_count, struct semaphore *sem){
+    *total_waiting_count += 1;
 
-  sema_down(&sem);
+    /* Allow other threads to continue getting/leaving/processing data */
+    sema_up(&mutex);
 
-  sema_down(&mutex);
+    /* When there is a slot available a valid semaphore will incremented */
+    sema_down(sem);
 
-  *job_count -= 1;
-  waiting_task -= 1;
+    /* The calling function is expected to have the mutex. Reacquire it. */
+    sema_down(&mutex);
+
+    /* We are no longer waiting for a slot */
+    *total_waiting_count -= 1;
+    waiting_task -= 1;
 }
 
-int select_from_waiting(struct semaphore *sem, unsigned int waiting){
-  int bust_empty_slot = BUS_CAPACITY - task_on_bus - waiting_task;
-  int can_select = MIN(bust_empty_slot, waiting);
+int wakeup_waiting_task(struct semaphore *sem, unsigned int waiting){
+    int empty_bus_slots = BUS_CAPACITY - task_on_bus - waiting_task;
+    int to_wake = MIN(empty_bus_slots, waiting);
 
-  for(int i = 0; i < can_select; i++){
-    sema_up(sem);
-    waiting_task++;
-  }
-  return can_select;
+    for (int i = 0; i < to_wake; i++)
+    {
+        sema_up(sem);
+        waiting_task++;
+    }
+    return to_wake;
 }
+
