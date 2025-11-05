@@ -1,0 +1,34 @@
+### get html
+GET http://localhost:8080/index.html
+### get txt
+GET http://localhost:8080/hello.txt
+### get gif
+GET http://localhost:8080/1.gif
+### get jpeg
+GET http://localhost:8080/1.jpeg
+### get jpg
+GET http://localhost:8080/1.jpg
+### get css
+GET http://localhost:8080/style.css
+
+### get 404 "Not Found"
+GET http://localhost:8080/no-file.html
+
+### put 501 (not implemented)
+PUT http://localhost:8080/index.html
+
+### get 400 (Bad request)
+GET http://localhost:8080/test.md
+
+
+
+### POST (create new file)
+POST http://localhost:8080/new_post_file.txt
+Content-Type: text/plain
+
+This is the content for the new file.
+It's created by POST.
+
+
+### GET new file
+GET http://localhost:8080/new_post_file.txt

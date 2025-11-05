@@ -1,1 +1,0 @@
-/usr/bin/cc CMakeFiles/lsh.dir/parse.c.o CMakeFiles/lsh.dir/lsh.c.o -o lsh  -lreadline -ltermcap 

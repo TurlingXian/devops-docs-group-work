@@ -1,0 +1,31 @@
+record some processes
+
+### go related
+
+* initialize
+
+`go mod init server`
+
+* create new file
+
+`touch http_server.go`
+
+* development
+`go run http_server.go 8080`
+
+* build
+`go build -o http_server .`
+
+* run
+`./http_server 8080`
+
+* install some external packages
+`go mod <package name>`
+
+### test related
+
+use `REST Client` vscode extension to test
+
+if you want to test the multi clients, you can use `curl http://localhost:8080/index.html` in you terminal (multi windows)
+
+jpeg file size is the largest, so it is more suitable for test the performance
