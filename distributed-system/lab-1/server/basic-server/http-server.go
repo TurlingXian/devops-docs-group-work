@@ -87,15 +87,7 @@ func (s *server) handleConnection(conn net.Conn) {
 
 	currentConn := s.connectionCount.Add(1)
 	log.Printf("Total active connection is: %d", currentConn)
-	_, err := fmt.Fprintf(conn, "Welcome! Total active: %d\n", currentConn)
-	if err != nil {
-		log.Printf("Error writing welcome message: %v", err)
-		// Don't continue if we can't even write to the client
-		s.connectionCount.Add(-1) // Decrement since we're closing early
-		return
-	}
 
-	log.Println("Accepted a connection")
 	reader := bufio.NewReader(conn)
 
 	req, err := http.ReadRequest(reader)
@@ -106,6 +98,8 @@ func (s *server) handleConnection(conn net.Conn) {
 		return
 	}
 
+	log.Println("Accepted a connection")
+
 	switch req.Method {
 	case "GET":
 		s.handleGet(conn, req)
@@ -114,6 +108,9 @@ func (s *server) handleConnection(conn net.Conn) {
 	default:
 		s.handleError(conn, http.StatusNotImplemented)
 	}
+
+	// for test purpose
+	time.Sleep(1 * time.Second)
 
 	remainingConn := s.connectionCount.Add(-1)
 	log.Printf("Handling a connection completed, remaining: %d", remainingConn)

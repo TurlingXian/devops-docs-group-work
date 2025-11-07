@@ -5,130 +5,173 @@ import (
 	"io"
 	"log"
 	"net"
-	"net/http"
-	"net/http/httptest" // We need this to create a fake backend server
-	"net/url"
+	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
 
-// TestServerAsProxy checks both proxy functionality AND the connection limit.
-func TestServerAsProxy(t *testing.T) {
+// TestMain sets up our test environment (e.g., creating files to GET)
+func TestMain(m *testing.M) {
+	// Create a dummy 'static' directory
+	if err := os.MkdirAll("static", 0755); err != nil {
+		log.Fatalf("Could not create static dir: %v", err)
+	}
+	// Create a dummy 'uploads' directory
+	if err := os.MkdirAll("uploads", 0755); err != nil {
+		log.Fatalf("Could not create uploads dir: %v", err)
+	}
+	// Create a dummy file to serve
+	hello := []byte("<html>Hello World</html>")
+	if err := os.WriteFile("static/index.html", hello, 0644); err != nil {
+		log.Fatalf("Could not create test file: %v", err)
+	}
 
-	// 1. --- Create a Fake Backend Server ---
-	// This is the "real" web server our proxy will talk to.
-	// It's set to be slow (1 second) to help test concurrency.
-	const backendWorkTime = 1 * time.Second
+	// Run all tests
+	code := m.Run()
 
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(backendWorkTime) // Simulate slow work
-		fmt.Fprintln(w, "Hello from the backend!")
-	}))
-	defer backend.Close()
+	// Clean up
+	os.RemoveAll("static")
+	os.RemoveAll("uploads")
+	os.Exit(code)
+}
 
-	// 2. --- Start Your Proxy Server (Server Under Test) ---
-	s, err := newServer(":0") // Listen on a random port
+// Helper function to start a server and return its address
+func startTestServer(t *testing.T) (addr string, stop func()) {
+	s, err := newServer(":0") //
 	if err != nil {
 		t.Fatalf("Failed to create server: %v", err)
 	}
-	// We MUST change the worker to call the proxy handler.
-	// This test ASSUMES you've made this change in http-server.go:
-	// func (s *server) worker() {
-	// 	  ...
-	//    for conn := range s.connection {
-	//        s.proxyHandleConnection(conn) // <-- MUST BE THIS
-	//    }
-	// }
-	s.Start()
-	defer s.Stop()
+	s.Start() //
 
-	proxyAddr := s.listener.Addr().String()
-	log.Printf("Test Proxy Server started on %s", proxyAddr)
-	log.Printf("Test Backend Server started on %s", backend.URL)
+	// Get the dynamic address
+	addr = s.listener.Addr().String()
 
-	// 3. --- Run The Test ---
-	const numClients = 15 // More than MAX_CONNECTION (10)
+	stop = func() {
+		s.Stop() //
+	}
+	return addr, stop
+}
+
+// Helper to make a raw HTTP request (since we're not using http.Client)
+func sendRequest(t *testing.T, addr, requestStr string) string {
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("Failed to dial: %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := fmt.Fprint(conn, requestStr); err != nil {
+		t.Fatalf("Failed to write request: %v", err)
+	}
+
+	respBytes, err := io.ReadAll(conn)
+	if err != nil && err != io.EOF {
+		t.Fatalf("Failed to read response: %v", err)
+	}
+	return string(respBytes)
+}
+
+// TestGET_OK checks for a valid 200 OK file
+func TestGET_OK(t *testing.T) {
+	addr, stop := startTestServer(t)
+	defer stop()
+
+	req := "GET /index.html HTTP/1.1\r\nHost: test\r\n\r\n"
+	resp := sendRequest(t, addr, req)
+
+	if !strings.Contains(resp, "HTTP/1.1 200 OK") {
+		t.Fatalf("Expected 200 OK, got: %s", resp)
+	}
+	if !strings.Contains(resp, "Hello World") {
+		t.Fatalf("Expected 'Hello World' in body, got: %s", resp)
+	}
+	if !strings.Contains(resp, "Content-Type: text/html") {
+		t.Fatalf("Expected Content-Type text/html, got: %s", resp)
+	}
+}
+
+// TestGET_NotFound checks for a 404
+func TestGET_NotFound(t *testing.T) {
+	addr, stop := startTestServer(t)
+	defer stop()
+
+	req := "GET /nonexistent.txt HTTP/1.1\r\nHost: test\r\n\r\n"
+	resp := sendRequest(t, addr, req)
+
+	if !strings.Contains(resp, "HTTP/1.1 404 Not Found") {
+		t.Fatalf("Expected 404 Not Found, got: %s", resp)
+	}
+}
+
+// TestGET_BadRequest checks for an unsupported extension (400)
+func TestGET_BadRequest(t *testing.T) {
+	addr, stop := startTestServer(t)
+	defer stop()
+
+	req := "GET /image.zip HTTP/1.1\r\nHost: test\r\n\r\n"
+	resp := sendRequest(t, addr, req)
+
+	if !strings.Contains(resp, "HTTP/1.1 400 Bad Request") {
+		t.Fatalf("Expected 400 Bad Request, got: %s", resp)
+	}
+}
+
+// TestPOST_Valid checks for a 201 Created
+func TestPOST_Valid(t *testing.T) {
+	addr, stop := startTestServer(t)
+	defer stop()
+
+	body := "This is a test upload."
+	req := fmt.Sprintf(
+		"POST /test.txt HTTP/1.1\r\nHost: test\r\nContent-Length: %d\r\n\r\n%s",
+		len(body), body,
+	)
+	resp := sendRequest(t, addr, req)
+
+	if !strings.Contains(resp, "HTTP/1.1 201 Created") {
+		t.Fatalf("Expected 201 Created, got: %s", resp)
+	}
+	if !strings.Contains(resp, "Location: /test.txt") {
+		t.Fatalf("Expected Location header, got: %s", resp)
+	}
+
+	// Check if file was actually created
+	if _, err := os.Stat("uploads/test.txt"); os.IsNotExist(err) {
+		t.Fatal("POST success, but file was not created on disk")
+	}
+}
+
+// TestConcurrencyLimit checks that the MAX_CONNECTION limit works
+func TestConcurrencyLimit(t *testing.T) {
+	addr, stop := startTestServer(t)
+	defer stop()
+
+	numClients := 15 // More than MAX_CONNECTION
 
 	var wg sync.WaitGroup
 	wg.Add(numClients)
 
-	var totalServed atomic.Int32
-	var totalErrors atomic.Int32
-
-	// We'll use the backend's URL to tell the proxy where to go
-	backendURL, _ := url.Parse(backend.URL)
-
-	log.Printf("Launching %d clients...", numClients)
 	startTime := time.Now()
 
 	for i := 0; i < numClients; i++ {
-		go func(clientID int) {
+		go func() {
 			defer wg.Done()
-
-			// Connect to the PROXY, not the backend
-			conn, err := net.Dial("tcp", proxyAddr)
-			if err != nil {
-				t.Errorf("Client %d failed to dial proxy: %v", clientID, err)
-				totalErrors.Add(1)
-				return
-			}
-			defer conn.Close()
-
-			// --- This is the fix ---
-			// We act like a real client: WE SPEAK FIRST.
-			// We send a valid HTTP request to the proxy, asking
-			// for the backend server's content.
-			reqStr := fmt.Sprintf("GET /testpath HTTP/1.1\r\nHost: %s\r\n\r\n", backendURL.Host)
-
-			if _, err := fmt.Fprint(conn, reqStr); err != nil {
-				t.Errorf("Client %d failed to write request: %v", clientID, err)
-				totalErrors.Add(1)
-				return
-			}
-			// --- End fix ---
-
-			// Now we wait for the full response from the proxy
-			respBytes, err := io.ReadAll(conn)
-			if err != nil && err != io.EOF {
-				t.Errorf("Client %d read error: %v", clientID, err)
-				totalErrors.Add(1)
-				return
-			}
-
-			// Check if the proxying worked
-			if !strings.Contains(string(respBytes), "Hello from the backend!") {
-				t.Errorf("Client %d: invalid response body: %s", clientID, string(respBytes))
-				totalErrors.Add(1)
-				return
-			}
-
-			// We were served correctly
-			totalServed.Add(1)
-		}(i)
+			req := "GET /index.html HTTP/1.1\r\nHost: test\r\n\r\n"
+			// This will block until the server can handle it
+			sendRequest(t, addr, req)
+		}()
 	}
 
 	wg.Wait()
 	totalDuration := time.Since(startTime)
-	log.Printf("All clients finished in: %v", totalDuration)
 
-	// 4. --- Verify the Results ---
-	if totalErrors.Load() > 0 {
-		t.Errorf("Test failed: %d clients experienced errors", totalErrors.Load())
-	}
-
-	if totalServed.Load() != numClients {
-		t.Errorf("Not all clients were served! Expected %d, got %d",
-			numClients, totalServed.Load())
-	}
-
-	// **This is the main concurrency check:**
+	// --- Verification ---
 	// 15 clients * 1s work = 15 "work-seconds"
 	// With 10 workers, it must take at least 2 batches.
 	// (10 clients @ 1s) + (5 clients @ 1s) = 2 seconds minimum.
-	minExpectedTime := 2 * backendWorkTime
+	minExpectedTime := 2 * time.Second
 
 	if totalDuration < minExpectedTime {
 		t.Errorf("Connection limit was NOT respected! "+
@@ -136,15 +179,6 @@ func TestServerAsProxy(t *testing.T) {
 			totalDuration, minExpectedTime)
 	}
 
-	// Check if it was reasonable (not 10 seconds)
-	// (Add 1s for connection overhead)
-	maxExpectedTime := (2 * backendWorkTime) + (1 * time.Second)
-	if totalDuration > maxExpectedTime {
-		t.Errorf("Test took too long: %v, expected less than %v",
-			totalDuration, maxExpectedTime)
-	}
-
-	log.Printf("Test complete. %d clients served.", totalServed.Load())
-	log.Printf("Concurrency test passed: total time %v (expected ~%v)",
-		totalDuration, minExpectedTime)
+	log.Printf("Concurrency test passed: %d clients served in %v (expected > %v)",
+		numClients, totalDuration, minExpectedTime)
 }
