@@ -1,19 +1,20 @@
 # official image from GOLANG
-FROM golang:latest
-
-# Create a new user just for running the application
-RUN groupadd -g 1123 application && \
-    useradd -u 1123 -g application application
-
-# Print the UID and GID
-RUN echo 'Inside Container:' && echo 'User: $(whoami) UID: $(id -u) GID: $(id -g)'
+FROM golang:latest AS base-go
 
 WORKDIR /usr/src/app
 COPY . .
 EXPOSE 8080
-RUN cd advance-server && go build -v
+RUN cd advance-server && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -v
 
-RUN chown -R application:application /usr/src/app
+FROM alpine:latest
+
+
+RUN addgroup -S application && adduser -S application -G application
+
+WORKDIR /app
+
+COPY --from=base-go --chown=application:application /usr/src/app/advance-server/advance-server .
 USER application
 
-ENTRYPOINT [ "./advance-server/advance-server" ]
+# ENTRYPOINT [ "/bin/advance-server" ]
+ENTRYPOINT [ "/app/advance-server" ]

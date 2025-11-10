@@ -1,0 +1,17 @@
+# official image from GOLANG
+FROM golang:latest AS base-go
+
+WORKDIR /usr/src/app
+COPY . .
+EXPOSE 8080
+RUN cd advance-server && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -v
+
+RUN groupadd -g 1123 application && \
+    useradd -u 1123 -g application application
+
+RUN chown -R application:application /usr/src/app
+
+USER application
+
+# CMD ["/app/advance-server", "8080"]
+ENTRYPOINT [ "/app/advance-server" ]
