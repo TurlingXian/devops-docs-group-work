@@ -16,7 +16,7 @@ import (
 
 // FILE_ROOT specifies the directory to serve files from.
 // All GETs and POSTs will operate relative to this directory.
-const FILE_ROOT = "../client/webroot"
+const FILE_ROOT = "webroot"
 
 // MAX_CLIENTS defines the maximum number of concurrent connections (Requirement: 10).
 const MAX_CLIENTS = 10
