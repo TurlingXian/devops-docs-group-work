@@ -5,3 +5,4 @@ build
 .vscode/*
 
 data-privacy/lab1/sandbox/*
+data-privacy/lab1/__pycache__/*
