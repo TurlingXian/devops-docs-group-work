@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // --- Configuration ---
@@ -86,6 +87,10 @@ func handleConnection(conn net.Conn, semaphore chan struct{}) {
 	defer func() {
 		<-semaphore // Release the slot
 	}()
+	// for test overwhelming
+	log.Println("--> (TEST) start sleeping in 5s...")
+	time.Sleep(5 * time.Second)
+	log.Println("--> (TEST) end sleeping")
 
 	// Use bufio.Reader to read data from the connection
 	reader := bufio.NewReader(conn)
