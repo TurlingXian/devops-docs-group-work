@@ -174,37 +174,36 @@ docker run -d -p 9999:9999 proxy-image
 ## ☁️ Part 4: AWS Deployment (Cloud Extra)
 This project was deployed using the AWS EC2 path, as it is the most budget-safe option for the AWS Learner Lab environment due to its automatic shutdown policy.
 
-Deployment Steps
-Launch EC2 Instance
-
+1. Launch EC2 Instance
 AMI: Amazon Linux 2023 (or 2).
 
 Instance Type: t2.micro.
 
 Key pair: Download the vockey.pem (or your own) key.
 
-Security Group: Ensure both of the following are checked/enabled:
+Security Group: Ensure you create rules to allow traffic:
 
-✅ Allow SSH traffic (Port 22)
+✅ Allow SSH traffic (Port 22, Source: Anywhere)
 
-✅ Allow HTTP traffic (Port 80)
+✅ Allow HTTP traffic (Port 80, Source: Anywhere)
 
-Connect to EC2 via SSH
+✅ Allow Proxy traffic (Port 9999, Type: Custom TCP, Source: Anywhere)
 
+2. Connect to EC2 & Install Dependencies
 Get the instance's "Public IPv4 address".
 
 From your local terminal:
 
 ```
+
 # (Ensure the .pem file is in your current directory and has correct permissions)
 chmod 400 vockey.pem
 ssh -i vockey.pem ec2-user@<your_public_ip>
 ```
-
-Install Dependencies on EC2
 You are now logged into the cloud server. Run (using dnf for Amazon Linux 2023):
 
 ```
+
 sudo dnf update -y
 sudo dnf install git -y
 sudo dnf install docker -y
@@ -212,28 +211,41 @@ sudo systemctl start docker
 sudo usermod -a -G docker ec2-user
 exit # Exit to apply permission changes
 ```
-Re-login, Clone, and Run
-
-ssh into the server again.
+3. Deploy Both Services
+Re-login via ssh to the server.
 
 Clone your GitHub repository:
 
 ```
+
 git clone [https://github.com/your-username/your-repo.git](https://github.com/your-username/your-repo.git)
-cd your-repo/lab-1/server
+cd your-repo/lab-1
 ```
+Build & Run the Server
 
-Build the Docker image on the EC2 instance:
 
 ```
+cd server
 docker build -t server-image .
-```
-Run the container, forwarding public port 80 to the container's port 8080:
-
-```
 docker run -d -p 80:8080 server-image
+cd ..
+```
+Build & Run the Proxy
+
+
 ```
 
-Verify
+cd proxy
+docker build -t proxy-image .
+docker run -d -p 9999:9999 proxy-image
+cd ..
+```
+4. Verify
+Test the Server: Open your browser to http://<your_public_ip>. You should see your index.html.
 
-Open your web browser and navigate to http://<your_public_ip>. You should see your website!
+Test the Proxy: Open your local terminal and run:
+
+```
+
+curl -i -x http://<your_public_ip>:9999 [http://example.com](http://example.com)
+```
