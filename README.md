@@ -70,7 +70,7 @@ go build -o http_server .
 # 4. Run the built program:
 ./http_server 8080
 The server is now running on http://localhost:8080.
-
+```
 2. proxy (Advanced Part)
 This server acts as an HTTP proxy, forwarding requests to an origin server.
 
@@ -92,7 +92,7 @@ Error Handling:
 Robustness: A 30-second timeout is set for all outbound requests to prevent hanging goroutines.
 
 🏃‍♂️ How to Run
-Bash
+```
 
 # 1. (In a separate terminal) Navigate to the proxy directory
 cd lab-1/proxy
@@ -106,6 +106,7 @@ go build -o proxy .
 
 # 4. Run the built program:
 ./proxy 9999
+```
 The proxy server is now running on http://localhost:9999.
 
 🧪 How to Test
@@ -121,15 +122,16 @@ Ensure your proxy is running on localhost:9999.
 
 In VS Code, open your JSON settings and add:
 
-JSON
+```JSON
 
 "http.proxy": "http://localhost:9999"
+```
 Restart VS Code. All requests from REST Client will now be routed through your proxy.
 
 Simulating Concurrent Clients
 To test the 10-client concurrency limit, curl is the best tool.
 
-Bash
+```
 
 # Open 11 or more separate terminal windows
 # Rapidly run the following command in each one
