@@ -1,31 +1,239 @@
-record some processes
+# 🚀 Lab 1: Go HTTP Server & Proxy
 
-### go related
+This is the solution for Lab 1 in the Distributed Systems course at Chalmers University of Technology. The project involves building a concurrent HTTP web server and an HTTP proxy server from scratch in Go, without relying on standard libraries like `http.ListenAndServe`.
 
-* initialize
+The project is divided into three main parts:
+1.  **Part 1: `http_server`** - A concurrent static file server.
+2.  **Part 2: `proxy`** - A concurrent HTTP proxy server.
+3.  **Part 3 & Extra: Docker & AWS** - Dockerizing the servers and deploying to AWS.
 
-`go mod init server`
+---
 
-* create new file
+## 📂 Project Structure
 
-`touch http_server.go`
+A clean project structure is maintained to meet the "cleanliness" bonus. The two independent Go programs (server and proxy) are separated into their own directories, each containing its own `go.mod` and `Dockerfile`.
 
-* development
-`go run http_server.go 8080`
+```
+.
+├── proxy
+│   ├── Dockerfile
+│   ├── go.mod
+│   └── proxy.go
+├── server
+│   ├── Dockerfile
+│   ├── go.mod
+│   ├── http_server.go
+│   └── webroot
+│       ├── 1.gif
+│       ├── 1.jpeg
+│       ├── 1.jpg
+│       ├── hello.txt
+│       ├── index.html
+│       ├── new_post_file.txt
+│       ├── style.css
+│       └── test.md
+└── test_api.http
+```
 
-* build
-`go build -o http_server .`
 
-* run
-`./http_server 8080`
+---
 
-* install some external packages
-`go mod <package name>`
+## 🖥️ Part 1 & 2: Local Build & Run
 
-### test related
+### 1. `http_server` (Basic Part)
 
-use `REST Client` vscode extension to test
+This server is responsible for serving static files from the `server/webroot` directory.
 
-if you want to test the multi clients, you can use `curl http://localhost:8080/index.html` in you terminal (multi windows)
+#### ✨ Key Features
+* **Concurrency:** Handles each request in a new goroutine, with a semaphore (Go channel) limiting maximum concurrent connections to 10.
+* **Method Support:**
+    * `GET`: Serves files from `webroot` (html, txt, gif, jpeg, jpg, css).
+    * `POST`: Receives a request body and creates a new file in `webroot`.
+    * `Other`: Responds with `501 Not Implemented`.
+* **Error Handling:**
+    * `404 Not Found`: The requested file does not exist.
+    * `400 Bad Request`: For unsupported file types, invalid paths (e.g., `../`), or any other error.
 
-jpeg file size is the largest, so it is more suitable for test the performance
+#### 🏃‍♂️ How to Run
+
+```bash
+# 1. Navigate to the server directory
+cd lab-1/server
+
+# 2. (Optional) Run in development mode:
+go run http_server.go 8080
+
+# 3. (Recommended) Build the binary:
+#    This creates an executable file named "http_server"
+go build -o http_server .
+
+# 4. Run the built program:
+./http_server 8080
+The server is now running on http://localhost:8080.
+
+2. proxy (Advanced Part)
+This server acts as an HTTP proxy, forwarding requests to an origin server.
+
+✨ Key Features
+Concurrency: Handles each request in a new goroutine (also limited to 10).
+
+Method Support:
+
+GET: Forwards GET requests to the target server (supports both relative and absolute URLs).
+
+Other: Responds with 501 Not Implemented.
+
+Error Handling:
+
+400 Bad Request: If the request cannot be parsed.
+
+502 Bad Gateway: If the origin server cannot be reached.
+
+Robustness: A 30-second timeout is set for all outbound requests to prevent hanging goroutines.
+
+🏃‍♂️ How to Run
+Bash
+
+# 1. (In a separate terminal) Navigate to the proxy directory
+cd lab-1/proxy
+
+# 2. (Optional) Run in development mode:
+go run proxy.go 9999
+
+# 3. (Recommended) Build the binary:
+#    This creates an executable file named "proxy"
+go build -o proxy .
+
+# 4. Run the built program:
+./proxy 9999
+The proxy server is now running on http://localhost:9999.
+
+🧪 How to Test
+This project uses the REST Client extension for VS Code for testing.
+
+Test File: test_api.http
+
+Testing http_server: Simply open test_api.http and click "Send Request" on the desired test.
+
+Testing proxy:
+
+Ensure your proxy is running on localhost:9999.
+
+In VS Code, open your JSON settings and add:
+
+JSON
+
+"http.proxy": "http://localhost:9999"
+Restart VS Code. All requests from REST Client will now be routed through your proxy.
+
+Simulating Concurrent Clients
+To test the 10-client concurrency limit, curl is the best tool.
+
+Bash
+
+# Open 11 or more separate terminal windows
+# Rapidly run the following command in each one
+# You will observe the first 10 return immediately, while the 11th waits
+curl http://localhost:8080/index.html
+
+```
+## 🐋 Part 3: Docker (Bonus)
+This project provides two separate Dockerfiles for the server and proxy. Both use multi-stage builds to produce minimal, secure, and production-ready images.
+
+1. Build server-image
+
+```
+# 1. Ensure you are in the lab-1/server directory
+cd lab-1/server
+
+# 2. Build the image
+docker build -t server-image .
+```
+2. Build proxy-image
+
+```
+# 1. Ensure you are in the lab-1/proxy directory
+cd lab-1/proxy
+
+# 2. Build the image
+docker build -t proxy-image .
+```
+
+3. Run the Containers
+
+```
+# Run the http_server container
+# -d: detach (run in background)
+# -p 8080:8080: map host port 8080 to container port 8080
+docker run -d -p 8080:8080 server-image
+
+# Run the proxy container
+docker run -d -p 9999:9999 proxy-image
+```
+
+## ☁️ Part 4: AWS Deployment (Cloud Extra)
+This project was deployed using the AWS EC2 path, as it is the most budget-safe option for the AWS Learner Lab environment due to its automatic shutdown policy.
+
+Deployment Steps
+Launch EC2 Instance
+
+AMI: Amazon Linux 2023 (or 2).
+
+Instance Type: t2.micro.
+
+Key pair: Download the vockey.pem (or your own) key.
+
+Security Group: Ensure both of the following are checked/enabled:
+
+✅ Allow SSH traffic (Port 22)
+
+✅ Allow HTTP traffic (Port 80)
+
+Connect to EC2 via SSH
+
+Get the instance's "Public IPv4 address".
+
+From your local terminal:
+
+```
+# (Ensure the .pem file is in your current directory and has correct permissions)
+chmod 400 vockey.pem
+ssh -i vockey.pem ec2-user@<your_public_ip>
+```
+
+Install Dependencies on EC2
+You are now logged into the cloud server. Run (using dnf for Amazon Linux 2023):
+
+```
+sudo dnf update -y
+sudo dnf install git -y
+sudo dnf install docker -y
+sudo systemctl start docker
+sudo usermod -a -G docker ec2-user
+exit # Exit to apply permission changes
+```
+Re-login, Clone, and Run
+
+ssh into the server again.
+
+Clone your GitHub repository:
+
+```
+git clone [https://github.com/your-username/your-repo.git](https://github.com/your-username/your-repo.git)
+cd your-repo/lab-1/server
+```
+
+Build the Docker image on the EC2 instance:
+
+```
+docker build -t server-image .
+```
+Run the container, forwarding public port 80 to the container's port 8080:
+
+```
+docker run -d -p 80:8080 server-image
+```
+
+Verify
+
+Open your web browser and navigate to http://<your_public_ip>. You should see your website!
