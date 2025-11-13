@@ -71,7 +71,7 @@ go build -o http_server .
 ./http_server 8080
 The server is now running on http://localhost:8080.
 ```
-2. proxy (Advanced Part)
+### 2. proxy (Advanced Part)
 This server acts as an HTTP proxy, forwarding requests to an origin server.
 
 ✨ Key Features
@@ -116,29 +116,10 @@ Test File: test_api.http
 
 Testing http_server: Simply open test_api.http and click "Send Request" on the desired test.
 
-Testing proxy:
+You can also use the test_all.sh and test_concurrency.sh to test all functionalities.
 
-Ensure your proxy is running on localhost:9999.
+Plus, in order to test the concurrency, we set a 5 seconds delay in the server code.
 
-In VS Code, open your JSON settings and add:
-
-```JSON
-
-"http.proxy": "http://localhost:9999"
-```
-Restart VS Code. All requests from REST Client will now be routed through your proxy.
-
-Simulating Concurrent Clients
-To test the 10-client concurrency limit, curl is the best tool.
-
-```
-
-# Open 11 or more separate terminal windows
-# Rapidly run the following command in each one
-# You will observe the first 10 return immediately, while the 11th waits
-curl http://localhost:8080/index.html
-
-```
 ## 🐋 Part 3: Docker (Bonus)
 This project provides two separate Dockerfiles for the server and proxy. Both use multi-stage builds to produce minimal, secure, and production-ready images.
 
