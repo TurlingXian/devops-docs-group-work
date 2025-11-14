@@ -72,10 +72,9 @@ def generate_candidates(db: DB) -> List[Candidate]:
   result = []
   total_space = db_size(db=db)
 
-  possible_combinations = product([0, 1], repeat=total_space)
-  for combns in possible_combinations:
-    list_of_candidate_in_float  = list(map(float, combns))
-    result.append(list_of_candidate_in_float)
+  possible_combinations = product([0.0, 1.0], repeat=total_space) # 0 0 1 1 0 0, 0 1 1 0 0 0 ...
+  for combns in possible_combinations: #
+    result.append(combns)
 
   return result
 
@@ -85,7 +84,6 @@ def fit(noise_mag: Noise, results: List[ResultQuery], candidate: Candidate) -> b
   corresponding noisy sum in `results` whose distance is greater than `noise_mag`.
   """
   pass # TODO: Implement this function
-  result = True
 
   no_noisy_sum = all_sums_no_noise(candidate)
   if len(no_noisy_sum) != len(results):
@@ -97,7 +95,7 @@ def fit(noise_mag: Noise, results: List[ResultQuery], candidate: Candidate) -> b
     if distance > noise_mag:
       return False
 
-  return result
+  return True
 
 def find_candidates(db: DB, noise: Noise) -> List[Candidate]:
   """Finds candidates whose non-noisy sums "fit" the noisy ones."""
