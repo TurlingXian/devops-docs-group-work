@@ -1,0 +1,21 @@
+[16:13:08] Test basic function for the server... http://:8080, port 8080
+[0;31mFAIL[0m: GET 200 OK (index.html) (Expected 200, Got 000)
+[0;31mFAIL[0m: GET 404 Not Found (Expected 404, Got 000)
+[16:13:08] Test ended with 2 falied
+========================================================
+[16:13:33] Test basic function for the server... http://:8080, port 8080
+[0;31mFAIL[0m: GET 200 OK (index.html) (Expected 200, Got 000)
+[0;31mFAIL[0m: GET 404 Not Found (Expected 404, Got 000)
+[16:13:33] Test ended with 2 falied
+========================================================
+[16:14:14] Test basic function for the server... http://localhost:8080, port 8080
+[0;31mFAIL[0m: GET 200 OK (index.html) (Expected 200, Got 000)
+[0;31mFAIL[0m: GET 404 Not Found (Expected 404, Got 000)
+[16:14:14] Test ended with 2 falied
+========================================================
+[16:15:10] Test basic function for the server... http://localhost:8080, port 8080
+[16:15:10][BASIC] Function test...
+[0;31mFAIL[0m: GET 200 OK (index.html) (Expected 200, Got 000)
+[0;31mFAIL[0m: GET 404 Not Found (Expected 404, Got 000)
+[16:15:10] Test ended with 2 falied
+========================================================

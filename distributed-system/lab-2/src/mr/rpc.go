@@ -23,12 +23,12 @@ type GetTaskReply struct {
 	Type            TaskType
 }
 
-type MarkTaskAsDoneArgs struct {
+type UpdateTaskStatusArgs struct {
 	Name string
 	Type TaskType
 }
 
-type MarkTaskAsDoneReply struct {
+type UpdateTaskStatusReply struct {
 }
 
 var (

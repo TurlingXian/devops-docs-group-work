@@ -45,13 +45,13 @@ func startTestServer(t *testing.T, isProxy bool) (addr string, stop func()) {
 		t.Fatalf("Failed to create server: %v", err)
 	}
 	// Start in the requested mode
-	s.Start(isProxy) //
+	s.Start(isProxy)
 
 	// Get the dynamic address
 	addr = s.listener.Addr().String()
 
 	stop = func() {
-		s.Stop() //
+		s.Stop()
 	}
 	return addr, stop
 }

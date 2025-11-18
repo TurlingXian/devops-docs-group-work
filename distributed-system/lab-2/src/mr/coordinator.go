@@ -113,6 +113,78 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 	return errors.New("All tasks are completed, no more remaining.")
 }
 
+// update the status for map or reduce task
+func (c *Coordinator) UpdateTaskStatus(args *UpdateTaskStatusArgs, reply *UpdateTaskStatusReply) error {
+	c.cond.L.Lock()
+	defer c.cond.L.Unlock()
+
+	if args.Type == mapType {
+		c.mapTasks[args.Name].status = completed
+		c.mapRemaining -= 1
+	} else {
+		c.reduceTasks[args.Name].status = completed
+		c.reduceRemaining -= 1
+	}
+	return nil
+}
+
+// if a task is dead, a worker is down, something needs to be rearranged, we call this
+func (c *Coordinator) Rescheduler() {
+	for {
+		time.Sleep(100 * time.Millisecond) // avoid the "spinning" logic ~ busy wait
+		c.cond.L.Lock()                    // if we want to change, better accquired the lock first
+		if c.mapRemaining != 0 {
+			for task := range c.mapTasks {
+				currentTime := time.Now().UTC()
+				startTime := c.mapTasks[task].startTime
+				status := c.mapTasks[task].status
+				if status == inprogress {
+					different := currentTime.Sub(startTime)
+					if different > 10 {
+						// if the task was running too long, assume that we have 10
+						log.Printf("Rescheduling a task with name '%s', type of this task '%s'.", task, mapType)
+						c.mapTasks[task].status = unstarted
+						c.cond.Broadcast() // signal the GetTask function, the Wait() function
+					}
+				}
+			}
+		} else if c.reduceRemaining != 0 {
+			c.cond.Broadcast() // signal the fetch (GetTask) to get reduce task or wait,...
+			for task := range c.reduceTasks {
+				currentTime := time.Now().UTC()
+				startTime := c.reduceTasks[task].startTime
+				status := c.reduceTasks[task].status
+				if status == inprogress {
+					different := currentTime.Sub(startTime)
+					if different > 10 {
+						log.Printf("Rescheduling a task with name '%s', type of this task '%s'.", task, reduceType)
+						c.reduceTasks[task].status = unstarted
+						c.cond.Broadcast()
+					}
+				}
+			}
+		} else {
+			c.cond.Broadcast() // if no task remains, then broadcast too
+			c.cond.L.Unlock()  // end the accessing shared database
+			break
+		}
+		c.cond.L.Unlock() // simply unlock
+	}
+}
+
+// function to just signal the "main" program that we have done
+
+// main/mrcoordinator.go calls Done() periodically to find out
+// if the entire job has finished.
+func (c *Coordinator) Done() bool {
+	c.cond.L.Lock()
+	defer c.cond.L.Unlock()
+	if c.reduceRemaining == 0 {
+		return true
+	}
+	return false
+}
+
 // start a thread that listens for RPCs from worker.go
 func (c *Coordinator) server() {
 	rpc.Register(c)
@@ -125,16 +197,6 @@ func (c *Coordinator) server() {
 		log.Fatal("listen error:", e)
 	}
 	go http.Serve(l, nil)
-}
-
-// main/mrcoordinator.go calls Done() periodically to find out
-// if the entire job has finished.
-func (c *Coordinator) Done() bool {
-	ret := false
-
-	// Your code here.
-
-	return ret
 }
 
 // create a Coordinator.
@@ -171,6 +233,9 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	}
 
 	// Your code here.
+
+	// start a new rountine for the rescheduler (constanly check for exceeded time task independently)
+	go c.Rescheduler()
 
 	c.server()
 	return &c
