@@ -26,8 +26,9 @@ def indexes(db_size: int) -> List[List[Index]]:
   result = []
   indexes_list = []
   for i in range(db_size):
-    indexes_list.append(i) # non zero
+    indexes_list.append(i)
   
+  # generate and append (a flatten list) all combination with k element(s), k from 1 to n
   for r in range(1, db_size + 1):
     result.extend(comb(r, indexes_list))
   return result
@@ -59,6 +60,7 @@ def all_sums_no_noise(candidate: Candidate) -> List[ResultQuery]:
   pass # TODO: Implement this function
   result = []
 
+  # generate the list of combinations base on the length of passed candidate
   list_of_combinations = indexes(len(candidate))
   for combins in list_of_combinations:
     current_sum = sum_indexes(candidate, combins)
