@@ -74,28 +74,53 @@ func (c *Coordinator) GetReduceTask() (string, int) {
 func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 	c.cond.L.Lock() // lock the conditional variable when accessing shared variable
 	// check map task
-	if c.mapRemaining != 0 {
-		// check if we still have map task in the queue
-		mapTask, numberOfMapTask := c.GetMapTask()
-		for mapTask == "" { // the queue is empty
-			if c.mapRemaining == 0 { // no job
+	if c.mapRemaining > 0 {
+		// still have remaining
+		// check the queue
+		mapTask, indexOfTask := c.GetMapTask()
+		for mapTask == "" {
+			if c.mapRemaining == 0 {
 				break
 			}
-			// still have job
-			c.cond.Wait() // wait for accquiring the lock
-			mapTask, numberOfMapTask = c.GetMapTask()
+			c.cond.Wait()
+			mapTask, indexOfTask = c.GetMapTask()
 		}
-		if mapTask != "" { // have somthing in the queue
-			reply.Name = mapTask                    // name of the task
-			reply.Number = numberOfMapTask          // total number of tasks
-			reply.Type = mapType                    // type of task, of course it is map
-			reply.PartitionNumber = c.numbeOfReduce // number of partition to assign
-			c.cond.L.Unlock()                       // complete the critical selection
+		if mapTask != "" {
+			reply.Name = mapTask
+			reply.Number = indexOfTask
+			reply.Type = mapType
+			reply.PartitionNumber = c.numbeOfReduce
+			c.cond.L.Unlock()
 			return nil
 		}
+		reply.Type = waitType
+		c.cond.L.Unlock()
+		return nil
 	}
+	// if c.mapRemaining != 0 {
+	// 	// check if we still have map task in the queue
+	// 	mapTask, numberOfMapTask := c.GetMapTask()
+	// 	for mapTask == "" { // the queue is empty
+	// 		if c.mapRemaining == 0 { // no job
+	// 			break
+	// 		}
+	// 		// still have job
+	// 		c.cond.Wait() // wait for accquiring the lock
+	// 		mapTask, numberOfMapTask = c.GetMapTask()
+	// 	}
+	// 	if mapTask != "" { // have somthing in the queue
+	// 		reply.Name = mapTask                    // name of the task
+	// 		reply.Number = numberOfMapTask          // total number of tasks
+	// 		reply.Type = mapType                    // type of task, of course it is map
+	// 		reply.PartitionNumber = c.numbeOfReduce // number of partition to assign
+	// 		c.cond.L.Unlock()                       // complete the critical selection
+	// 		return nil
+	// 	}
+	// }
+	// instead of directly goes to reduce, set the map worker in wait state
+
 	// check reduce task
-	if c.reduceRemaining != 0 {
+	if c.reduceRemaining > 0 {
 		reduceTask, numberOfReduceTask := c.GetReduceTask()
 		for reduceTask == "" {
 			if c.reduceRemaining == 0 {
@@ -105,10 +130,16 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 			c.cond.Wait()
 			reduceTask, numberOfReduceTask = c.GetReduceTask()
 		}
+		if reduceTask != "" {
+			reply.Name = reduceTask
+			reply.Number = numberOfReduceTask
+			reply.Type = reduceType
+			reply.MapAddresses = c.mapTaskAddresses
+			c.cond.L.Unlock()
+			return nil
+		}
 		// dont have to fetch the queue because reduce task can be taken from output of map
-		reply.Name = reduceTask
-		reply.Number = numberOfReduceTask
-		reply.Type = reduceType
+		reply.Type = waitType
 		c.cond.L.Unlock()
 		return nil
 	}

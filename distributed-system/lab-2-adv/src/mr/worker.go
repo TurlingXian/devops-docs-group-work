@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 // for advance feature
@@ -99,22 +100,32 @@ func Worker(mapf func(string, string) []KeyValue,
 	// }
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
-	// workerAddress := StartHTTPFileServer(directoryPath)
-	// log.Printf("Worker file server started at %s", workerAddress)
+	workerAddress := StartHTTPFileServer(directoryPath)
+	log.Printf("Worker file server started at %s", workerAddress)
 
 	for {
 		rep, err := CallGetTask()
 		if err != nil {
 			log.Fatal(err)
 		}
-		if rep.Type == mapType {
-			// if get a map task, execute then call update
+		switch rep.Type {
+		case mapType:
 			ExecuteMapTask(rep.Name, rep.Number, rep.PartitionNumber, mapf)
-			CallUpdateTaskStatus(mapType, rep.Name, "")
-		} else {
-			ExecuteReduceTask(rep.Number, reducef)
+			CallUpdateTaskStatus(mapType, rep.Name, workerAddress)
+		case reduceType:
+			ExecuteReduceTask(rep.Number, reducef, rep.MapAddresses)
 			CallUpdateTaskStatus(reduceType, rep.Name, "")
+		case waitType:
+			time.Sleep(1 * time.Second)
 		}
+		// if rep.Type == mapType {
+		// 	// if get a map task, execute then call update
+		// 	ExecuteMapTask(rep.Name, rep.Number, rep.PartitionNumber, mapf)
+		// 	CallUpdateTaskStatus(mapType, rep.Name, workerAddress)
+		// } else {
+		// 	ExecuteReduceTask(rep.Number, reducef, rep.MapAddresses)
+		// 	CallUpdateTaskStatus(reduceType, rep.Name, "")
+		// }
 	}
 }
 
@@ -156,7 +167,7 @@ func ExecuteMapTask(filename string, mapNumber, numberofReduce int, mapf func(st
 
 	for _, kv := range initVal {
 		// check for each "word"
-		currentParition := ihash(kv.Key) % numberofReduce
+		currentParition := ihash(kv.Key) % numberofReduce // number of parition (percisely)
 		f, ok := mp[currentParition]
 		if !ok {
 			// create new "bucket" if the word is not existed
@@ -174,42 +185,50 @@ func ExecuteMapTask(filename string, mapNumber, numberofReduce int, mapf func(st
 	// rename for the reduce phase
 	for rNum, f := range mp {
 		os.Rename(f.Name(), fmt.Sprintf("mr-%d-%d", mapNumber, rNum))
+		// pwd, _ := os.Getwd()
+		// log.Printf("Store file as %s in %s", f.Name(), pwd)
 	}
 }
 
 // function for reduce worker
-func ExecuteReduceTask(partitionNumber int, reducef func(string, []string) string) {
-	// fetch the filename
-	filenames, _ := WalkDir("./", partitionNumber) // look for current directory of all file with reduceNumber pattern
+func ExecuteReduceTask(partitionNumber int, reducef func(string, []string) string, mapWorkerAddress []string) {
+	// fetch the filename (change to remote fetching)
+	// filenames, _ := WalkDir("./", partitionNumber) // look for current directory of all file with reduceNumber pattern
 	data := make([]KeyValue, 0)
-	for _, filename := range filenames {
-		file, err := os.Open(filename)
-		if err != nil {
-			log.Fatalf("Cannot open file %v, error %s", filename, err)
-		}
-		content, err := io.ReadAll(file)
-		if err != nil {
-			log.Fatalf("Cannot read %v, error %s", filename, err)
-		}
-		file.Close()
+	for mapWorkerID, workerAddress := range mapWorkerAddress {
+		filename := fmt.Sprintf("mr-%d-%d", mapWorkerID, partitionNumber)
+		fileURL := fmt.Sprintf("%s/%s", workerAddress, filename)
 
-		// this split string got an error of unexpected EOF in test (wc test)
+		resp, err := http.Get(fileURL)
+		if err != nil {
+			// log.Printf("failed to read from %s: %v", fileURL, err)
+			os.Exit(1) // cannot continue since data is corrupt (for now)
+		}
+		if resp.StatusCode != http.StatusOK {
+			// We got a 404 or 500. Do NOT parse this as JSON!
+			log.Printf("Worker at %s returned status %d for file %s", workerAddress, resp.StatusCode, filename)
+			resp.Body.Close()
+			continue
+		}
+		defer resp.Body.Close()
+
+		content, err := io.ReadAll(resp.Body)
+		if err != nil {
+			// log.Fatalf("Cannot read from %v, error %s", resp, err)
+			os.Exit(1)
+		}
 		kvstrings := strings.Split(string(content), "\n")
-		// kv := KeyValue{}
 		for _, kvstring := range kvstrings {
-			// trimmed the whitespace, end character,...
+			// trimmed
 			trimmed := strings.TrimSpace(kvstring)
 			if len(trimmed) == 0 {
-				// skip empty line
 				continue
 			}
-			kv := KeyValue{} // allow the kv to get rid of garbage values
+			kv := KeyValue{}
 			err := json.Unmarshal([]byte(trimmed), &kv)
 			if err != nil {
-				log.Fatalf("Cannot unmarshal %v, error %s", filename, err)
-				// weaker error catching logic
-				// log.Printf("Warning: Cannot unmarshal line: %q, error: %v", trimmed, err)
-				// continue
+				// log.Fatalf("cannot unmarshal %v, error %s", filename, err)
+				os.Exit(1)
 			}
 			data = append(data, kv)
 		}

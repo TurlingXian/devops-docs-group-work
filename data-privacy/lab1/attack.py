@@ -22,7 +22,6 @@ def comb(k: int, ns: List[int]) -> List[List[int]]:
 
 def indexes(db_size: int) -> List[List[Index]]:
   """Generates all possible combinations of indexes for a database of given `db_size`."""
-  pass # TODO: Implement this function
   result = []
   indexes_list = []
   for i in range(db_size):
@@ -35,7 +34,6 @@ def indexes(db_size: int) -> List[List[Index]]:
 
 def all_sums(db: DB, noise: Noise) -> List[ResultQuery]:
   """Performs the noisy sums of all combinations of indexes for a given database `db`. It calls `add`."""
-  pass # TODO: Implement this function
   result = []
   combination_list = indexes(db_size(db))
 
@@ -46,7 +44,6 @@ def all_sums(db: DB, noise: Noise) -> List[ResultQuery]:
 
 def sum_indexes(candidate: Candidate, idx: List[Index]) -> ResultQuery:
   """Given a candidate and some indexes `idx`, it performs the sum of the conditions (without noise)."""
-  pass # TODO: Implement this function
   result = 0
 
   for val in idx:
@@ -57,7 +54,6 @@ def sum_indexes(candidate: Candidate, idx: List[Index]) -> ResultQuery:
 
 def all_sums_no_noise(candidate: Candidate) -> List[ResultQuery]:
   """Given a candidate, it performs the sums (without noise) of all combinations of indexes."""
-  pass # TODO: Implement this function
   result = []
 
   # generate the list of combinations base on the length of passed candidate
@@ -70,7 +66,6 @@ def all_sums_no_noise(candidate: Candidate) -> List[ResultQuery]:
 
 def generate_candidates(db: DB) -> List[Candidate]:
   """Given a database `db`, it generates all the possible candidates."""
-  pass # TODO: Implement this function
   result = []
   total_space = db_size(db=db)
 
@@ -85,7 +80,6 @@ def fit(noise_mag: Noise, results: List[ResultQuery], candidate: Candidate) -> b
   This function will determine if exists a non-noisy sum on the candidate and a
   corresponding noisy sum in `results` whose distance is greater than `noise_mag`.
   """
-  pass # TODO: Implement this function
 
   no_noisy_sum = all_sums_no_noise(candidate)
   if len(no_noisy_sum) != len(results):
@@ -101,7 +95,6 @@ def fit(noise_mag: Noise, results: List[ResultQuery], candidate: Candidate) -> b
 
 def find_candidates(db: DB, noise: Noise) -> List[Candidate]:
   """Finds candidates whose non-noisy sums "fit" the noisy ones."""
-  pass # TODO: Implement this function
   result = []
 
   list_of_candidate = generate_candidates(db)
@@ -115,7 +108,6 @@ def find_candidates(db: DB, noise: Noise) -> List[Candidate]:
 
 def attack(db: DB, noise: Noise) -> List[CandidateWithNames]:
   """Guess the conditions of all patients in the dataset."""
-  pass # TODO: Implement this function
   result = []
 
   possible_candidates = find_candidates(db, noise)
