@@ -187,11 +187,6 @@ func ExecuteMapTask(filename string, mapNumber, numberofReduce int, mapf func(st
 	}
 
 	// rename for the reduce phase, this can be caused a false error, with smaller keys than the number of reduce
-	// for rNum, f := range mp {
-	// 	os.Rename(f.Name(), fmt.Sprintf("mr-%d-%d", mapNumber, rNum))
-	// 	// pwd, _ := os.Getwd()
-	// 	// log.Printf("Store file as %s in %s", f.Name(), pwd)
-	// }
 	for i := 0; i < numberofReduce; i++ {
 		finalName := fmt.Sprintf("mr-%d-%d", mapNumber, i)
 		f, ok := mp[i]
@@ -236,9 +231,12 @@ func ExecuteReduceTask(partitionNumber int, reducef func(string, []string) strin
 		defer resp.Body.Close()
 
 		content, err := io.ReadAll(resp.Body)
-		if err != nil {
+		if err != nil { // failed when read (at the moddle of reading stuff)
 			// log.Fatalf("Cannot read from %v, error %s", resp, err)
-			os.Exit(1)
+			// os.Exit(1)
+			log.Printf("Read error from %s: %v", fileURL, err)
+			CallReportFailureMapTask(mapWorkerID)
+			return fmt.Errorf("read error from map task %d", mapWorkerID)
 		}
 		kvstrings := strings.Split(string(content), "\n")
 		for _, kvstring := range kvstrings {
@@ -251,7 +249,10 @@ func ExecuteReduceTask(partitionNumber int, reducef func(string, []string) strin
 			err := json.Unmarshal([]byte(trimmed), &kv)
 			if err != nil {
 				// log.Fatalf("cannot unmarshal %v, error %s", filename, err)
-				os.Exit(1)
+				// os.Exit(1)
+				log.Printf("Data corruption detected in %s (Task %d). Reporting failure.", filename, mapWorkerID)
+				CallReportFailureMapTask(mapWorkerID)
+				return fmt.Errorf("corrupted data from map task %d", mapWorkerID)
 			}
 			data = append(data, kv)
 		}
