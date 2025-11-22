@@ -148,6 +148,28 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 	return errors.New("all tasks are completed, no more remaining")
 }
 
+// a function to handle the failed worker
+func (c *Coordinator) ReportMapWorkerFailure(args *ReportFailureArgs, reply *ReportFailureReply) error {
+	c.cond.L.Lock() // lock when accessing shared data
+	defer c.cond.L.Unlock()
+
+	var taskName string
+	for name, metadata := range c.mapTasks {
+		if metadata.number == args.MapTaskIndex { // found a task that was reported as failed
+			taskName = name // end soon
+			break
+		}
+	}
+
+	if taskName != "" && c.mapTasks[taskName].status == completed {
+		log.Printf("Reported map task %d failed, reschedule...", args.MapTaskIndex)
+		c.mapTasks[taskName].status = unstarted
+		c.mapRemaining++
+	}
+
+	return nil
+}
+
 // update the status for map or reduce task
 func (c *Coordinator) UpdateTaskStatus(args *UpdateTaskStatusArgs, reply *UpdateTaskStatusReply) error {
 	c.cond.L.Lock()

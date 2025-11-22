@@ -113,9 +113,13 @@ func Worker(mapf func(string, string) []KeyValue,
 			ExecuteMapTask(rep.Name, rep.Number, rep.PartitionNumber, mapf)
 			CallUpdateTaskStatus(mapType, rep.Name, workerAddress)
 		case reduceType:
-			ExecuteReduceTask(rep.Number, reducef, rep.MapAddresses)
-			CallUpdateTaskStatus(reduceType, rep.Name, "")
-		case waitType:
+			err := ExecuteReduceTask(rep.Number, reducef, rep.MapAddresses)
+			if err != nil {
+				CallUpdateTaskStatus(reduceType, rep.Name, "")
+			} else {
+				time.Sleep(1 * time.Second) // simply wait if err, since map must be rerun
+			}
+		case waitType: // map worker wait for reduce worker to take the file (to not forcefully exist)
 			time.Sleep(1 * time.Second)
 		}
 		// if rep.Type == mapType {
@@ -191,10 +195,11 @@ func ExecuteMapTask(filename string, mapNumber, numberofReduce int, mapf func(st
 }
 
 // function for reduce worker
-func ExecuteReduceTask(partitionNumber int, reducef func(string, []string) string, mapWorkerAddress []string) {
+func ExecuteReduceTask(partitionNumber int, reducef func(string, []string) string, mapWorkerAddress []string) error {
 	// fetch the filename (change to remote fetching)
 	// filenames, _ := WalkDir("./", partitionNumber) // look for current directory of all file with reduceNumber pattern
 	data := make([]KeyValue, 0)
+	// check the failed first (before setup all the inputs)
 	for mapWorkerID, workerAddress := range mapWorkerAddress {
 		filename := fmt.Sprintf("mr-%d-%d", mapWorkerID, partitionNumber)
 		fileURL := fmt.Sprintf("%s/%s", workerAddress, filename)
@@ -202,10 +207,12 @@ func ExecuteReduceTask(partitionNumber int, reducef func(string, []string) strin
 		resp, err := http.Get(fileURL)
 		if err != nil {
 			// log.Printf("failed to read from %s: %v", fileURL, err)
-			os.Exit(1) // cannot continue since data is corrupt (for now)
+			// os.Exit(1) // cannot continue since data is corrupt (for now)
+			CallReportFailureMapTask(mapWorkerID)
+			return fmt.Errorf("map task ID %d unreachable", mapWorkerID)
 		}
 		if resp.StatusCode != http.StatusOK {
-			// We got a 404 or 500. Do NOT parse this as JSON!
+			// We got a 404 or 500. Do NOT parse this as JSON! (since it will generate "unexpected" letter p)
 			log.Printf("Worker at %s returned status %d for file %s", workerAddress, resp.StatusCode, filename)
 			resp.Body.Close()
 			continue
@@ -255,6 +262,7 @@ func ExecuteReduceTask(partitionNumber int, reducef func(string, []string) strin
 		i = j
 	}
 	ofile.Close()
+	return nil
 }
 
 // example function to show how to make an RPC call to the coordinator.
@@ -316,6 +324,15 @@ func CallUpdateTaskStatus(tasktype TaskType, name string, workeraddress string) 
 	} else {
 		return errors.New("call failed")
 	}
+}
+
+// call to report failed task
+func CallReportFailureMapTask(mapIndex int) {
+	args := ReportFailureArgs{
+		MapTaskIndex: mapIndex,
+	}
+	reply := ReportFailureReply{}
+	call("Coordinator.ReportMapWorkerFailure", &args, &reply)
 }
 
 // send an RPC request to the coordinator, wait for the response.
