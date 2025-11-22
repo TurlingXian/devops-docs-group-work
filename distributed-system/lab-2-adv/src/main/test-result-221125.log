@@ -1,0 +1,36 @@
+*** Starting wc test.
+all tasks are completed, no more remaining
+all tasks are completed, no more remaining
+all tasks are completed, no more remaining
+--- wc test: PASS
+*** Starting indexer test.
+all tasks are completed, no more remaining
+all tasks are completed, no more remaining
+--- indexer test: PASS
+*** Starting map parallelism test.
+all tasks are completed, no more remaining
+all tasks are completed, no more remaining
+--- map parallelism test: PASS
+*** Starting reduce parallelism test.
+all tasks are completed, no more remaining
+--- reduce parallelism test: PASS
+all tasks are completed, no more remaining
+*** Starting job count test.
+all tasks are completed, no more remaining
+all tasks are completed, no more remaining
+all tasks are completed, no more remaining
+all tasks are completed, no more remaining
+--- job count test: PASS
+*** Starting early exit test.
+all tasks are completed, no more remaining
+all tasks are completed, no more remaining
+all tasks are completed, no more remaining
+--- early exit test: PASS
+*** Starting crash test.
+unexpected EOF
+mr-crash-all mr-correct-crash.txt differ: byte 1, line 1
+--- crash output is not the same as mr-correct-crash.txt
+--- crash test: FAIL
+*** FAILED SOME TESTS
+*** PASSED {6}
+*** FAILED TESTS IN TRIAL 1

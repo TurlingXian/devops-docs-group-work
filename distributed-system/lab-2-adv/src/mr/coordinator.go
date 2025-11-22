@@ -97,26 +97,6 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 		c.cond.L.Unlock()
 		return nil
 	}
-	// if c.mapRemaining != 0 {
-	// 	// check if we still have map task in the queue
-	// 	mapTask, numberOfMapTask := c.GetMapTask()
-	// 	for mapTask == "" { // the queue is empty
-	// 		if c.mapRemaining == 0 { // no job
-	// 			break
-	// 		}
-	// 		// still have job
-	// 		c.cond.Wait() // wait for accquiring the lock
-	// 		mapTask, numberOfMapTask = c.GetMapTask()
-	// 	}
-	// 	if mapTask != "" { // have somthing in the queue
-	// 		reply.Name = mapTask                    // name of the task
-	// 		reply.Number = numberOfMapTask          // total number of tasks
-	// 		reply.Type = mapType                    // type of task, of course it is map
-	// 		reply.PartitionNumber = c.numbeOfReduce // number of partition to assign
-	// 		c.cond.L.Unlock()                       // complete the critical selection
-	// 		return nil
-	// 	}
-	// }
 	// instead of directly goes to reduce, set the map worker in wait state
 
 	// check reduce task
@@ -176,15 +156,33 @@ func (c *Coordinator) UpdateTaskStatus(args *UpdateTaskStatusArgs, reply *Update
 	defer c.cond.L.Unlock()
 
 	if args.Type == mapType { // must collect the information of the map worker first
-		if c.mapTasks[args.Name].status != completed {
-			c.mapTasks[args.Name].status = completed
+		taskMetadata, exists := c.mapTasks[args.Name]
+		if !exists {
+			log.Printf("CRITICAL WARNING: Worker tried to update unknown Map Task: %s", args.Name)
+			return nil
+		}
+
+		if taskMetadata.status != completed {
+			taskMetadata.status = completed
 			c.mapRemaining -= 1
-			currentMapWorkerID := c.mapTasks[args.Name].number
-			c.mapTaskAddresses[currentMapWorkerID] = args.WorkerAddress
+
+			currentMapWorkerID := taskMetadata.number
+
+			if currentMapWorkerID >= 0 && currentMapWorkerID < len(c.mapTaskAddresses) {
+				c.mapTaskAddresses[currentMapWorkerID] = args.WorkerAddress
+			} else {
+				log.Printf("CRITICAL: Map Worker ID %d out of bounds", currentMapWorkerID)
+			}
 		}
 	} else {
-		if c.reduceTasks[args.Name].status != completed {
-			c.reduceTasks[args.Name].status = completed
+		taskMetadata, exists := c.reduceTasks[args.Name]
+		if !exists {
+			log.Printf("CRITICAL WARNING: Worker tried to update unknown Reduce Task: %s", args.Name)
+			return nil
+		}
+
+		if taskMetadata.status != completed {
+			taskMetadata.status = completed
 			c.reduceRemaining -= 1
 		}
 	}

@@ -228,7 +228,7 @@ func ExecuteReduceTask(partitionNumber int, reducef func(string, []string) strin
 			CallReportFailureMapTask(mapWorkerID)
 			return fmt.Errorf("missing expected data from task %d", mapWorkerID)
 		}
-		defer resp.Body.Close()
+		// defer resp.Body.Close()
 
 		content, err := io.ReadAll(resp.Body)
 		if err != nil { // failed when read (at the moddle of reading stuff)
@@ -238,6 +238,7 @@ func ExecuteReduceTask(partitionNumber int, reducef func(string, []string) strin
 			CallReportFailureMapTask(mapWorkerID)
 			return fmt.Errorf("read error from map task %d", mapWorkerID)
 		}
+		resp.Body.Close()
 		kvstrings := strings.Split(string(content), "\n")
 		for _, kvstring := range kvstrings {
 			// trimmed
@@ -260,8 +261,16 @@ func ExecuteReduceTask(partitionNumber int, reducef func(string, []string) strin
 
 	sort.Sort(ByKey(data))
 
+	// temp name as the trick in the paper (and the lab instruction)
+
 	oname := fmt.Sprintf("mr-out-%d", partitionNumber)
-	ofile, _ := os.Create(oname)
+
+	tempFile, err := os.CreateTemp(".", "mr-temp-*") // Create in current dir
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %v", err)
+	}
+
+	// ofile, _ := os.Create(oname)
 
 	i := 0
 	for i < len(data) {
@@ -275,10 +284,20 @@ func ExecuteReduceTask(partitionNumber int, reducef func(string, []string) strin
 		}
 		output := reducef(data[i].Key, values)
 
-		fmt.Fprintf(ofile, "%v %v\n", data[i].Key, output)
+		// uses temp first
+		fmt.Fprintf(tempFile, "%v %v\n", data[i].Key, output)
 		i = j
 	}
-	ofile.Close()
+
+	tempFile.Close()
+
+	// only renamed if completed
+	err = os.Rename(tempFile.Name(), oname)
+	if err != nil {
+		return fmt.Errorf("failed to rename temp file: %v", err)
+	}
+
+	// ofile.Close()
 	return nil
 }
 
