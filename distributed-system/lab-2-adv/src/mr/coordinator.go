@@ -74,22 +74,21 @@ func (c *Coordinator) GetReduceTask() (string, int) {
 func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 	c.cond.L.Lock() // lock the conditional variable when accessing shared variable
 	// check map task
+loop:
 	if c.mapRemaining > 0 {
 		// still have remaining
 		// check the queue
 		mapTask, indexOfTask := c.GetMapTask()
-		// for mapTask == "" {
-		// 	if c.mapRemaining == 0 {
-		// 		break
-		// 	}
-		// 	c.cond.Wait()
-		// 	mapTask, indexOfTask = c.GetMapTask()
-		// }
+
 		if mapTask != "" {
 			reply.Name = mapTask
 			reply.Number = indexOfTask
 			reply.Type = mapType
 			reply.PartitionNumber = c.numbeOfReduce
+			// avoid race condition (read the modified)
+			addressCopy := make([]string, len(c.mapTaskAddresses))
+			copy(addressCopy, c.mapTaskAddresses)
+			reply.MapAddresses = addressCopy
 			c.cond.L.Unlock()
 			return nil
 		}
@@ -97,7 +96,6 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 		c.cond.L.Unlock()
 		return nil
 	}
-	// instead of directly goes to reduce, set the map worker in wait state
 
 	// check reduce task
 	if c.reduceRemaining > 0 {
@@ -107,7 +105,14 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 				c.cond.L.Unlock()
 				return errors.New("all tasks are completed, no more remaining")
 			}
+			// check if the map phase was recovered
+			if c.mapRemaining > 0 {
+				goto loop
+			}
 			c.cond.Wait()
+			if c.mapRemaining > 0 {
+				goto loop
+			}
 			reduceTask, numberOfReduceTask = c.GetReduceTask()
 		}
 		if reduceTask != "" {

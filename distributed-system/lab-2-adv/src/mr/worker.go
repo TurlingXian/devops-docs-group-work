@@ -82,24 +82,6 @@ func ihash(key string) int {
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-
-	// Your worker implementation here.
-
-	// start the file server first, then take the address string
-
-	// go func() {
-	// 	if err := StartHTTPFileServer(directoryPath, defaultFilePort); err != nil {
-	// 		fmt.Printf("Server failed: %v", err)
-	// 		os.Exit(1)
-	// 	}
-	// }()
-
-	// workerAddress, err := GetServerAddress()
-	// if workerAddress == "" {
-	// 	log.Fatalf("Cannot get the worker's address: %v", err)
-	// }
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
 	workerAddress := StartHTTPFileServer(directoryPath)
 	log.Printf("Worker file server started at %s", workerAddress)
 
@@ -122,14 +104,6 @@ func Worker(mapf func(string, string) []KeyValue,
 		case waitType: // map worker wait for reduce worker to take the file (to not forcefully exist)
 			time.Sleep(1 * time.Second)
 		}
-		// if rep.Type == mapType {
-		// 	// if get a map task, execute then call update
-		// 	ExecuteMapTask(rep.Name, rep.Number, rep.PartitionNumber, mapf)
-		// 	CallUpdateTaskStatus(mapType, rep.Name, workerAddress)
-		// } else {
-		// 	ExecuteReduceTask(rep.Number, reducef, rep.MapAddresses)
-		// 	CallUpdateTaskStatus(reduceType, rep.Name, "")
-		// }
 	}
 }
 
@@ -175,7 +149,7 @@ func ExecuteMapTask(filename string, mapNumber, numberofReduce int, mapf func(st
 		f, ok := mp[currentParition]
 		if !ok {
 			// create new "bucket" if the word is not existed
-			f, err = os.CreateTemp("", "tmp")
+			f, err = os.CreateTemp(".", "tmp")
 			mp[currentParition] = f
 			if err != nil {
 				log.Fatal(err)
@@ -209,14 +183,17 @@ func ExecuteReduceTask(partitionNumber int, reducef func(string, []string) strin
 	// fetch the filename (change to remote fetching)
 	// filenames, _ := WalkDir("./", partitionNumber) // look for current directory of all file with reduceNumber pattern
 	data := make([]KeyValue, 0)
+	client := http.Client{
+		Timeout: 5 * time.Second,
+	}
 	// check the failed first (before setup all the inputs)
 	for mapWorkerID, workerAddress := range mapWorkerAddress {
 		filename := fmt.Sprintf("mr-%d-%d", mapWorkerID, partitionNumber)
 		fileURL := fmt.Sprintf("%s/%s", workerAddress, filename)
 
-		resp, err := http.Get(fileURL)
+		resp, err := client.Get(fileURL)
 		if err != nil {
-			// log.Printf("failed to read from %s: %v", fileURL, err)
+			log.Printf("failed to read from %s: %v", fileURL, err)
 			// os.Exit(1) // cannot continue since data is corrupt (for now)
 			CallReportFailureMapTask(mapWorkerID)
 			return fmt.Errorf("map task ID %d unreachable", mapWorkerID)
@@ -301,33 +278,6 @@ func ExecuteReduceTask(partitionNumber int, reducef func(string, []string) strin
 	return nil
 }
 
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-// func CallExample() {
-
-// 	// declare an argument structure.
-// 	args := ExampleArgs{}
-
-// 	// fill in the argument(s).
-// 	args.X = 99
-
-// 	// declare a reply structure.
-// 	reply := ExampleReply{}
-
-// 	// send the RPC request, wait for the reply.
-// 	// the "Coordinator.Example" tells the
-// 	// receiving server that we'd like to call
-// 	// the Example() method of struct Coordinator.
-// 	ok := call("Coordinator.Example", &args, &reply)
-// 	if ok {
-// 		// reply.Y should be 100.
-// 		fmt.Printf("reply.Y %v\n", reply.Y)
-// 	} else {
-// 		fmt.Printf("call failed!\n")
-// 	}
-// }
-
 // function call to get a task from coordinator
 func CallGetTask() (*GetTaskReply, error) {
 	args := GetTaskArgs{}
@@ -336,7 +286,7 @@ func CallGetTask() (*GetTaskReply, error) {
 	ok := call("Coordinator.GetTask", &args, &reply)
 	if ok {
 		// get response success
-		// fmt.Printf("reply.Name '%v', reply.Type '%v'\n", reply.Name, reply.Type)
+		fmt.Printf("reply.Name '%v', reply.Type '%v'\n", reply.Name, reply.Type)
 		return &reply, nil
 	} else {
 		// some errors happened
@@ -374,6 +324,7 @@ func CallReportFailureMapTask(mapIndex int) {
 // send an RPC request to the coordinator, wait for the response.
 // usually returns true.
 // returns false if something goes wrong.
+
 func call(rpcname string, args interface{}, reply interface{}) bool {
 	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
 	sockname := coordinatorSock()
