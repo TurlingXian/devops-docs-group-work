@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const timeOutCoefficient = 10
+const timeOutCoefficient = 12
 const defaultWorkerPort = 30022
 
 var (
@@ -92,9 +92,8 @@ loop:
 			c.cond.L.Unlock()
 			return nil
 		}
-		reply.Type = waitType
-		c.cond.L.Unlock()
-		return nil
+		c.cond.Wait()
+		goto loop
 	}
 
 	// check reduce task
@@ -124,9 +123,7 @@ loop:
 			return nil
 		}
 		// dont have to fetch the queue because reduce task can be taken from output of map
-		reply.Type = waitType
-		c.cond.L.Unlock()
-		return nil
+		goto loop
 	}
 
 	c.cond.L.Unlock()
@@ -150,6 +147,8 @@ func (c *Coordinator) ReportMapWorkerFailure(args *ReportFailureArgs, reply *Rep
 		log.Printf("Reported map task %d failed, reschedule...", args.MapTaskIndex)
 		c.mapTasks[taskName].status = unstarted
 		c.mapRemaining++
+
+		c.cond.Broadcast()
 	}
 
 	return nil
@@ -191,6 +190,7 @@ func (c *Coordinator) UpdateTaskStatus(args *UpdateTaskStatusArgs, reply *Update
 			c.reduceRemaining -= 1
 		}
 	}
+	c.cond.Broadcast()
 	return nil
 }
 
@@ -199,6 +199,7 @@ func (c *Coordinator) Rescheduler() {
 	for {
 		time.Sleep(100 * time.Millisecond) // avoid the "spinning" logic ~ busy wait
 		c.cond.L.Lock()                    // if we want to change, better accquired the lock first
+		taskReschedule := false
 		if c.mapRemaining != 0 {
 			for task := range c.mapTasks {
 				currentTime := time.Now().UTC()
@@ -210,12 +211,13 @@ func (c *Coordinator) Rescheduler() {
 						// if the task was running too long, assume that we have 10
 						// log.Printf("Rescheduling a task with name '%s', type of this task '%s'.", task, mapType)
 						c.mapTasks[task].status = unstarted
-						c.cond.Broadcast() // signal the GetTask function, the Wait() function
+						// c.cond.Broadcast() // signal the GetTask function, the Wait() function
+						taskReschedule = true
 					}
 				}
 			}
 		} else if c.reduceRemaining != 0 {
-			c.cond.Broadcast() // signal the fetch (GetTask) to get reduce task or wait,...
+			// c.cond.Broadcast() // signal the fetch (GetTask) to get reduce task or wait,...
 			for task := range c.reduceTasks {
 				currentTime := time.Now().UTC()
 				startTime := c.reduceTasks[task].startTime
@@ -225,7 +227,8 @@ func (c *Coordinator) Rescheduler() {
 					if different > timeOutCoefficient*time.Second { // double check for the time, if not specified the second -> take nanosecond -> extremely fast -> create redundant tasks
 						// log.Printf("Rescheduling a task with name '%s', type of this task '%s'.", task, reduceType)
 						c.reduceTasks[task].status = unstarted
-						c.cond.Broadcast()
+						// c.cond.Broadcast()
+						taskReschedule = true
 					}
 				}
 			}
@@ -234,6 +237,11 @@ func (c *Coordinator) Rescheduler() {
 			c.cond.L.Unlock()  // end the accessing shared database
 			break
 		}
+
+		if taskReschedule {
+			c.cond.Broadcast()
+		}
+
 		c.cond.L.Unlock() // simply unlock
 	}
 }

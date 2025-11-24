@@ -83,7 +83,7 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	workerAddress := StartHTTPFileServer(directoryPath)
-	log.Printf("Worker file server started at %s", workerAddress)
+	// log.Printf("Worker file server started at %s", workerAddress)
 
 	for {
 		rep, err := CallGetTask()
@@ -97,12 +97,12 @@ func Worker(mapf func(string, string) []KeyValue,
 		case reduceType:
 			err := ExecuteReduceTask(rep.Number, reducef, rep.MapAddresses)
 			if err != nil {
-				time.Sleep(1 * time.Second) // simply wait if err, since map must be rerun
+				time.Sleep(10 * time.Millisecond) // simply wait if err, since map must be rerun
 			} else {
 				CallUpdateTaskStatus(reduceType, rep.Name, "")
 			}
 		case waitType: // map worker wait for reduce worker to take the file (to not forcefully exist)
-			time.Sleep(1 * time.Second)
+			time.Sleep(100 * time.Millisecond)
 		}
 	}
 }
