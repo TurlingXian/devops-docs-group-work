@@ -33,17 +33,9 @@ type UpdateTaskStatusArgs struct {
 type UpdateTaskStatusReply struct {
 }
 
-type ReportFailureArgs struct {
-	MapTaskIndex int // mark the map worker "i" failed
-}
-
-type ReportFailureReply struct {
-}
-
 var (
 	mapType    TaskType = "map"
 	reduceType TaskType = "reduce"
-	waitType   TaskType = "wait"
 )
 
 // Add your RPC definitions here.

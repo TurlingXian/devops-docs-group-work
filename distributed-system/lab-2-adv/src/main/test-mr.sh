@@ -5,10 +5,7 @@
 #
 
 # un-comment this to run the tests with the Go race detector.
-RACE=-race
-
-CURRENT_DATETIME=$(date '+%d%m%Y')
-TOTAL_PASS_TEST=0
+# RACE=-race
 
 if [[ "$OSTYPE" = "darwin"* ]]
 then
@@ -107,7 +104,6 @@ sort mr-out* | grep . > mr-wc-all
 if cmp mr-wc-all mr-correct-wc.txt
 then
   echo '---' wc test: PASS
-  ((TOTAL_PASS_TEST++))
 else
   echo '---' wc output is not the same as mr-correct-wc.txt
   echo '---' wc test: FAIL
@@ -139,7 +135,6 @@ sort mr-out* | grep . > mr-indexer-all
 if cmp mr-indexer-all mr-correct-indexer.txt
 then
   echo '---' indexer test: PASS
-  ((TOTAL_PASS_TEST++))
 else
   echo '---' indexer output is not the same as mr-correct-indexer.txt
   echo '---' indexer test: FAIL
@@ -170,7 +165,6 @@ fi
 if cat mr-out* | grep '^parallel.* 2' > /dev/null
 then
   echo '---' map parallelism test: PASS
-  ((TOTAL_PASS_TEST++))
 else
   echo '---' map workers did not run in parallel
   echo '---' map parallelism test: FAIL
@@ -199,7 +193,6 @@ then
   failed_any=1
 else
   echo '---' reduce parallelism test: PASS
-  ((TOTAL_PASS_TEST++))
 fi
 
 wait
@@ -221,7 +214,6 @@ NT=`cat mr-out* | awk '{print $2}'`
 if [ "$NT" -eq "8" ]
 then
   echo '---' job count test: PASS
-  ((TOTAL_PASS_TEST++))
 else
   echo '---' map jobs ran incorrect number of times "($NT != 8)"
   echo '---' job count test: FAIL
@@ -281,7 +273,6 @@ sort mr-out* | grep . > mr-wc-all-final
 if cmp mr-wc-all-final mr-wc-all-initial
 then
   echo '---' early exit test: PASS
-  ((TOTAL_PASS_TEST++))
 else
   echo '---' output changed after first worker exited
   echo '---' early exit test: FAIL
@@ -332,7 +323,6 @@ sort mr-out* | grep . > mr-crash-all
 if cmp mr-crash-all mr-correct-crash.txt
 then
   echo '---' crash test: PASS
-  ((TOTAL_PASS_TEST++))
 else
   echo '---' crash output is not the same as mr-correct-crash.txt
   echo '---' crash test: FAIL
@@ -344,6 +334,5 @@ if [ $failed_any -eq 0 ]; then
     echo '***' PASSED ALL TESTS
 else
     echo '***' FAILED SOME TESTS
-    echo '***' PASSED "{$TOTAL_PASS_TEST}"
     exit 1
 fi
