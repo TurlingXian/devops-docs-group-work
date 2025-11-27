@@ -13,6 +13,7 @@ import (
 )
 
 const timeOutCoefficient = 10
+const defaultWorkerPort = 30022
 
 var (
 	unstarted  Status = "unstarted"
@@ -29,53 +30,20 @@ type Coordinator struct {
 	reduceRemaining  int
 	numbeOfReduce    int      // number of "reduce" workes, used in pair with partition key
 	mapTaskAddresses []string // addressbook of all map workers
-	workers          map[int]*WorkerInfor
-	nextWorkerID     int
 }
+
+// Your code here -- RPC handlers for the worker to call.
+
+// an example RPC handler.
+//
+// the RPC argument and reply types are defined in rpc.go.
 
 type Status string // indicate the status, done, undone,...
 
 type TaskMetadata struct {
-	name      string
 	number    int // the sequence number to mark a task, i.e: taks 1-1, task 1-2 (task 1, partition 1, task 1 partition 2)
 	startTime time.Time
 	status    Status
-	workerID  int
-}
-
-type WorkerInfor struct {
-	workerID   int
-	lastUpTime time.Time
-	address    string
-	isFailed   bool
-}
-
-func (c *Coordinator) Register(args *RegisterArgs, reply *RegisterReplyArgs) error {
-	c.cond.L.Lock()
-	defer c.cond.L.Unlock()
-
-	c.nextWorkerID++
-	id := c.nextWorkerID
-
-	c.workers[id] = &WorkerInfor{
-		workerID:   id,
-		lastUpTime: time.Now(),
-		address:    args.WorkerAddress,
-		isFailed:   false,
-	}
-
-	reply.WorkerID = id
-	return nil
-}
-
-func (c *Coordinator) HealthCheckWorker(args *HealthCheckArgs, reply *HealthCheckReply) error {
-	c.cond.L.Lock()
-	defer c.cond.L.Unlock()
-
-	if w, ok := c.workers[args.WorkerID]; ok {
-		w.lastUpTime = time.Now()
-	}
-	return nil
 }
 
 // get task
@@ -106,63 +74,45 @@ func (c *Coordinator) GetReduceTask() (string, int) {
 func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 	c.cond.L.Lock() // lock the conditional variable when accessing shared variable
 	// check map task
-	if w, ok := c.workers[args.WorkerID]; ok {
-		w.lastUpTime = time.Now()
-	}
-
-loop:
-	if c.mapRemaining > 0 {
-		for name, task := range c.mapTasks {
-			if task.status == unstarted {
-				task.status = inprogress
-				task.workerID = args.WorkerID
-				task.startTime = time.Now()
-
-				reply.Name = name
-				reply.Number = task.number
-				reply.Type = mapType
-				reply.PartitionNumber = c.numbeOfReduce
-				reply.MapAddresses = make([]string, len(c.mapTaskAddresses))
-				copy(reply.MapAddresses, c.mapTaskAddresses)
-
-				c.cond.L.Unlock()
-				return nil
+	if c.mapRemaining != 0 {
+		// check if we still have map task in the queue
+		mapTask, numberOfMapTask := c.GetMapTask()
+		for mapTask == "" { // the queue is empty
+			if c.mapRemaining == 0 { // no job
+				break
 			}
+			// still have job
+			c.cond.Wait() // wait for accquiring the lock
+			mapTask, numberOfMapTask = c.GetMapTask()
 		}
-
-		c.cond.Wait()
-		goto loop
+		if mapTask != "" { // have somthing in the queue
+			reply.Name = mapTask                    // name of the task
+			reply.Number = numberOfMapTask          // total number of tasks
+			reply.Type = mapType                    // type of task, of course it is map
+			reply.PartitionNumber = c.numbeOfReduce // number of partition to assign
+			c.cond.L.Unlock()                       // complete the critical selection
+			return nil
+		}
 	}
-
-	if c.reduceRemaining > 0 {
-		for name, task := range c.reduceTasks {
-			if task.status == unstarted {
-				task.status = inprogress
-				task.workerID = args.WorkerID
-				task.startTime = time.Now()
-
-				reply.Name = name
-				reply.Number = task.number
-				reply.Type = reduceType
-				reply.MapAddresses = c.mapTaskAddresses
-
+	// check reduce task
+	if c.reduceRemaining != 0 {
+		reduceTask, numberOfReduceTask := c.GetReduceTask()
+		for reduceTask == "" {
+			if c.reduceRemaining == 0 {
 				c.cond.L.Unlock()
-				return nil
+				return errors.New("all tasks are completed, no more remaining")
 			}
+			c.cond.Wait()
+			reduceTask, numberOfReduceTask = c.GetReduceTask()
 		}
-
-		if c.mapRemaining > 0 {
-			goto loop
-		}
-
-		c.cond.Wait()
-		if c.mapRemaining > 0 {
-			goto loop
-		}
-		goto loop
+		// dont have to fetch the queue because reduce task can be taken from output of map
+		reply.Name = reduceTask
+		reply.Number = numberOfReduceTask
+		reply.Type = reduceType
+		c.cond.L.Unlock()
+		return nil
 	}
 
-	reply.Type = exitType
 	c.cond.L.Unlock()
 	return errors.New("all tasks are completed, no more remaining")
 }
@@ -172,131 +122,59 @@ func (c *Coordinator) UpdateTaskStatus(args *UpdateTaskStatusArgs, reply *Update
 	c.cond.L.Lock()
 	defer c.cond.L.Unlock()
 
-	if w, ok := c.workers[args.WorkerID]; ok && w.isFailed {
-		return nil
-	}
-
 	if args.Type == mapType { // must collect the information of the map worker first
-		if task, ok := c.mapTasks[args.Name]; ok {
-			if task.status != completed {
-				task.status = completed
-				task.workerID = args.WorkerID
-				c.mapRemaining--
-				if task.number >= 0 && task.number < len(c.mapTaskAddresses) {
-					c.mapTaskAddresses[task.number] = args.WorkerAddress
-				}
-				c.cond.Broadcast()
-			}
-		}
-	} else if args.Type == reduceType {
-		if task, ok := c.reduceTasks[args.Name]; ok {
-			if task.status != completed {
-				task.status = completed
-				c.reduceRemaining--
-				c.cond.Broadcast()
-			}
-		}
+		c.mapTasks[args.Name].status = completed
+		c.mapRemaining -= 1
+		currentMapWorkerID := c.mapTasks[args.Name].number
+		c.mapTaskAddresses[currentMapWorkerID] = args.WorkerAddress
+	} else {
+		c.reduceTasks[args.Name].status = completed
+		c.reduceRemaining -= 1
 	}
 	return nil
 }
 
-func (c *Coordinator) ReportMapWorkerFailure(args *ReportFailureArgs, reply *ReportFailureReply) error {
-	c.cond.L.Lock()
-	defer c.cond.L.Unlock()
-
-	var foundTask *TaskMetadata
-	for _, task := range c.mapTasks {
-		if task.number == args.MapTaskIndex {
-			foundTask = task
+// if a task is dead, a worker is down, something needs to be rearranged, we call this
+func (c *Coordinator) Rescheduler() {
+	for {
+		time.Sleep(100 * time.Millisecond) // avoid the "spinning" logic ~ busy wait
+		c.cond.L.Lock()                    // if we want to change, better accquired the lock first
+		if c.mapRemaining != 0 {
+			for task := range c.mapTasks {
+				currentTime := time.Now().UTC()
+				startTime := c.mapTasks[task].startTime
+				status := c.mapTasks[task].status
+				if status == inprogress {
+					different := currentTime.Sub(startTime)
+					if different > timeOutCoefficient*time.Second {
+						// if the task was running too long, assume that we have 10
+						// log.Printf("Rescheduling a task with name '%s', type of this task '%s'.", task, mapType)
+						c.mapTasks[task].status = unstarted
+						c.cond.Broadcast() // signal the GetTask function, the Wait() function
+					}
+				}
+			}
+		} else if c.reduceRemaining != 0 {
+			c.cond.Broadcast() // signal the fetch (GetTask) to get reduce task or wait,...
+			for task := range c.reduceTasks {
+				currentTime := time.Now().UTC()
+				startTime := c.reduceTasks[task].startTime
+				status := c.reduceTasks[task].status
+				if status == inprogress {
+					different := currentTime.Sub(startTime)
+					if different > timeOutCoefficient*time.Second { // double check for the time, if not specified the second -> take nanosecond -> extremely fast -> create redundant tasks
+						// log.Printf("Rescheduling a task with name '%s', type of this task '%s'.", task, reduceType)
+						c.reduceTasks[task].status = unstarted
+						c.cond.Broadcast()
+					}
+				}
+			}
+		} else {
+			c.cond.Broadcast() // if no task remains, then broadcast too
+			c.cond.L.Unlock()  // end the accessing shared database
 			break
 		}
-	}
-
-	if foundTask != nil && foundTask.status == completed {
-		foundTask.status = unstarted
-		foundTask.workerID = -1
-		c.mapRemaining++
-
-		c.cond.Broadcast()
-	}
-	return nil
-}
-
-func (c *Coordinator) FailTask(args *FailTaskArgs, reply *FailTaskReplyArgs) error {
-	c.cond.L.Lock()
-	defer c.cond.L.Unlock()
-
-	if args.Type == mapType {
-		if task, ok := c.mapTasks[args.Name]; ok {
-			if task.workerID == args.WorkerID && task.status == inprogress {
-				task.status = unstarted
-				task.workerID = -1
-				c.cond.Broadcast()
-			}
-		}
-	} else if args.Type == reduceType {
-		if task, ok := c.reduceTasks[args.Name]; ok {
-			if task.workerID == args.WorkerID && task.status == inprogress {
-				task.status = unstarted
-				task.workerID = -1
-				c.cond.Broadcast()
-			}
-		}
-	}
-	return nil
-}
-
-func (c *Coordinator) CrashDetector() {
-	for {
-		time.Sleep(500 * time.Millisecond)
-		c.cond.L.Lock()
-
-		if c.mapRemaining == 0 && c.reduceRemaining == 0 {
-			c.cond.L.Unlock()
-			return
-		}
-
-		now := time.Now()
-		needBroadcast := false
-
-		for id, worker := range c.workers {
-			if worker.isFailed {
-				continue
-			}
-			if now.Sub(worker.lastUpTime) > timeOutCoefficient*time.Second {
-				log.Printf("worker %d is dead", id)
-				worker.isFailed = true
-
-				for _, task := range c.mapTasks {
-					if task.workerID == id {
-						if task.status == inprogress {
-							task.status = unstarted
-							task.workerID = -1
-							needBroadcast = true
-						} else if task.status == completed {
-							task.status = unstarted
-							task.workerID = -1
-							c.mapRemaining++
-							needBroadcast = true
-						}
-					}
-				}
-
-				for _, task := range c.reduceTasks {
-					if task.workerID == id && task.status == inprogress {
-						task.status = unstarted
-						task.workerID = -1
-						needBroadcast = true
-					}
-				}
-			}
-		}
-
-		if needBroadcast {
-			c.cond.Broadcast()
-		}
-
-		c.cond.L.Unlock()
+		c.cond.L.Unlock() // simply unlock
 	}
 }
 
@@ -305,9 +183,13 @@ func (c *Coordinator) CrashDetector() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
+	ret := false
 	c.cond.L.Lock()
 	defer c.cond.L.Unlock()
-	return c.mapRemaining == 0 && c.reduceRemaining == 0
+	if c.reduceRemaining == 0 {
+		return true
+	}
+	return ret
 }
 
 // start a thread that listens for RPCs from worker.go
@@ -331,19 +213,16 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	mapTask := map[string]*TaskMetadata{}
 	for i, file := range files {
 		mapTask[file] = &TaskMetadata{
-			name:     file,
-			workerID: -1,
-			number:   i,
-			status:   unstarted,
+			number: i,
+			status: unstarted,
 		}
 	}
 
 	reduceTask := map[string]*TaskMetadata{}
 	for i := 0; i < nReduce; i++ {
 		reduceTask[fmt.Sprintf("%d", i)] = &TaskMetadata{
-			number:   i,
-			status:   unstarted,
-			workerID: -1,
+			number: i,
+			status: unstarted,
 		}
 	}
 
@@ -359,13 +238,12 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		numbeOfReduce:    nReduce,
 		cond:             cond,
 		mapTaskAddresses: make([]string, len(files)), // space equals to length of the passed files
-		workers:          make(map[int]*WorkerInfor),
 	}
 
 	// Your code here.
 
 	// start a new rountine for the rescheduler (constanly check for exceeded time task independently)
-	go c.CrashDetector()
+	go c.Rescheduler()
 
 	c.server()
 	return &c

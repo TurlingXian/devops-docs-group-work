@@ -6,19 +6,20 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
 	"net/rpc"
 	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
-	"time"
 )
 
 // for advance feature
-
-var currentWorkerID int
+const directoryPath = "."
 
 // borrow from mrapps
 type ByKey []KeyValue
@@ -48,7 +49,7 @@ func StartHTTPFileServer(rootDirectory string) string {
 		log.Fatalf("Error encountered: %v", err)
 	}
 
-	// log.Printf("Server information: %s, %d", ip, port)
+	log.Printf("Server information: %s, %d", ip, port)
 	go http.Serve(listener, http.FileServer(http.Dir(rootDirectory)))
 
 	return serverAddress
@@ -80,40 +81,63 @@ func ihash(key string) int {
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-	curerntWorkerAddress := StartHTTPFileServer(".")
 
-	id, err := CallRegister(curerntWorkerAddress)
-	if err != nil {
-		log.Fatal("register failed:", err)
-	}
-	currentWorkerID = id
+	// Your worker implementation here.
 
-	go WorkerHealthCheck()
+	// start the file server first, then take the address string
+
+	// go func() {
+	// 	if err := StartHTTPFileServer(directoryPath, defaultFilePort); err != nil {
+	// 		fmt.Printf("Server failed: %v", err)
+	// 		os.Exit(1)
+	// 	}
+	// }()
+
+	// workerAddress, err := GetServerAddress()
+	// if workerAddress == "" {
+	// 	log.Fatalf("Cannot get the worker's address: %v", err)
+	// }
+	// uncomment to send the Example RPC to the coordinator.
+	// CallExample()
+	// workerAddress := StartHTTPFileServer(directoryPath)
+	// log.Printf("Worker file server started at %s", workerAddress)
 
 	for {
 		rep, err := CallGetTask()
 		if err != nil {
-			return
+			log.Fatal(err)
 		}
-
-		switch rep.Type {
-		case mapType:
+		if rep.Type == mapType {
+			// if get a map task, execute then call update
 			ExecuteMapTask(rep.Name, rep.Number, rep.PartitionNumber, mapf)
-			CallUpdateTaskStatus(mapType, rep.Name, curerntWorkerAddress)
-		case reduceType:
-			err := ExecuteReduceTask(rep.Number, reducef, rep.MapAddresses)
-			if err != nil {
-				// CallReportFailure(currentWorkerID)
-				CallFailTask(reduceType, rep.Name, "map failed")
-			} else {
-				CallUpdateTaskStatus(reduceType, rep.Name, "")
-			}
-		case waitType:
-			time.Sleep(500 * time.Millisecond)
-		case exitType:
-			return
+			CallUpdateTaskStatus(mapType, rep.Name, "")
+		} else {
+			ExecuteReduceTask(rep.Number, reducef)
+			CallUpdateTaskStatus(reduceType, rep.Name, "")
 		}
 	}
+}
+
+// helper function to look for all the matching file (reduce looks for files created by map)
+func WalkDir(root string, reduceNumber int) ([]string, error) {
+	var files []string
+	// search for partition number
+	pattern := fmt.Sprintf(`mr-\d+-%d$`, reduceNumber)
+	reg, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err // error happened, return NULL
+	}
+
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if d.IsDir() {
+			return nil
+		}
+		if reg.Match([]byte(d.Name())) {
+			files = append(files, path)
+		}
+		return nil
+	})
+	return files, err
 }
 
 // function for map worker
@@ -128,79 +152,64 @@ func ExecuteMapTask(filename string, mapNumber, numberofReduce int, mapf func(st
 	}
 	file.Close()
 	initVal := mapf(filename, string(content)) // map the filename with its content
-	mp := map[int]*os.File{}
+	mp := map[int]*os.File{}                   // map of output result (cache)
 
-	for i := 0; i < numberofReduce; i++ {
-		f, err := os.CreateTemp(".", "mr-map-tmp-*")
-		if err != nil {
-			log.Fatal(err)
-		}
-		mp[i] = f
-	}
-
-	// Write data to the appropriate files
 	for _, kv := range initVal {
-		partition := ihash(kv.Key) % numberofReduce
+		// check for each "word"
+		currentParition := ihash(kv.Key) % numberofReduce
+		f, ok := mp[currentParition]
+		if !ok {
+			// create new "bucket" if the word is not existed
+			f, err = os.CreateTemp("", "tmp")
+			mp[currentParition] = f
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
 		kvj, _ := json.Marshal(kv)
-		fmt.Fprintf(mp[partition], "%s\n", kvj)
+		// fmt.Fprint(f, "%v\n", kvj)
+		fmt.Fprintf(f, "%s\n", kvj)
 	}
 
+	// rename for the reduce phase
 	for rNum, f := range mp {
-		if err := f.Close(); err != nil {
-			log.Printf("Error closing file %s: %v", f.Name(), err)
-			continue
-		}
-		targetName := fmt.Sprintf("mr-%d-%d", mapNumber, rNum)
-		os.Remove(targetName)
-		os.Rename(f.Name(), targetName)
+		os.Rename(f.Name(), fmt.Sprintf("mr-%d-%d", mapNumber, rNum))
 	}
 }
 
 // function for reduce worker
-func ExecuteReduceTask(partitionNumber int, reducef func(string, []string) string, mapWorkerAddress []string) error {
+func ExecuteReduceTask(partitionNumber int, reducef func(string, []string) string) {
+	// fetch the filename
+	filenames, _ := WalkDir("./", partitionNumber) // look for current directory of all file with reduceNumber pattern
 	data := make([]KeyValue, 0)
-	client := http.Client{
-		Timeout: 5 * time.Second,
-	}
-	// check the failed first (before setup all the inputs)
-	for mapWorkerID, workerAddress := range mapWorkerAddress {
-		filename := fmt.Sprintf("mr-%d-%d", mapWorkerID, partitionNumber)
-		fileURL := fmt.Sprintf("%s/%s", workerAddress, filename)
-
-		resp, err := client.Get(fileURL)
+	for _, filename := range filenames {
+		file, err := os.Open(filename)
 		if err != nil {
-			log.Printf("failed to read from %s: %v", fileURL, err)
-			CallReportFailure(mapWorkerID)
-			return fmt.Errorf("map task ID %d unreachable", mapWorkerID)
+			log.Fatalf("Cannot open file %v, error %s", filename, err)
 		}
-		if resp.StatusCode != http.StatusOK {
-			// We got a 404 or 500. Do NOT parse this as JSON! (since it will generate "unexpected" letter p)
-			log.Printf("Worker at %s returned status %d for file %s", workerAddress, resp.StatusCode, filename)
-			resp.Body.Close()
-			CallReportFailure(mapWorkerID)
-			return fmt.Errorf("missing expected data from task %d", mapWorkerID)
+		content, err := io.ReadAll(file)
+		if err != nil {
+			log.Fatalf("Cannot read %v, error %s", filename, err)
 		}
+		file.Close()
 
-		content, err := io.ReadAll(resp.Body)
-		if err != nil { // failed when read (at the moddle of reading stuff)
-			log.Printf("Read error from %s: %v", fileURL, err)
-			CallReportFailure(mapWorkerID)
-			return fmt.Errorf("read error from map task %d", mapWorkerID)
-		}
-		resp.Body.Close()
+		// this split string got an error of unexpected EOF in test (wc test)
 		kvstrings := strings.Split(string(content), "\n")
+		// kv := KeyValue{}
 		for _, kvstring := range kvstrings {
-			// trimmed
+			// trimmed the whitespace, end character,...
 			trimmed := strings.TrimSpace(kvstring)
 			if len(trimmed) == 0 {
+				// skip empty line
 				continue
 			}
-			kv := KeyValue{}
+			kv := KeyValue{} // allow the kv to get rid of garbage values
 			err := json.Unmarshal([]byte(trimmed), &kv)
 			if err != nil {
-				log.Printf("Data corruption detected in %s (Task %d). Reporting failure.", filename, mapWorkerID)
-				CallReportFailure(mapWorkerID)
-				return fmt.Errorf("corrupted data from map task %d", mapWorkerID)
+				log.Fatalf("Cannot unmarshal %v, error %s", filename, err)
+				// weaker error catching logic
+				// log.Printf("Warning: Cannot unmarshal line: %q, error: %v", trimmed, err)
+				// continue
 			}
 			data = append(data, kv)
 		}
@@ -208,13 +217,8 @@ func ExecuteReduceTask(partitionNumber int, reducef func(string, []string) strin
 
 	sort.Sort(ByKey(data))
 
-	// temp name as the trick in the paper (and the lab instruction)
 	oname := fmt.Sprintf("mr-out-%d", partitionNumber)
-
-	tempFile, err := os.CreateTemp(".", "mr-temp-*") // Create in current dir
-	if err != nil {
-		return fmt.Errorf("failed to create temp file: %v", err)
-	}
+	ofile, _ := os.Create(oname)
 
 	i := 0
 	for i < len(data) {
@@ -228,51 +232,42 @@ func ExecuteReduceTask(partitionNumber int, reducef func(string, []string) strin
 		}
 		output := reducef(data[i].Key, values)
 
-		// uses temp first
-		fmt.Fprintf(tempFile, "%v %v\n", data[i].Key, output)
+		fmt.Fprintf(ofile, "%v %v\n", data[i].Key, output)
 		i = j
 	}
-	tempFile.Close()
-
-	// only renamed if completed
-	err = os.Rename(tempFile.Name(), oname)
-	if err != nil {
-		return fmt.Errorf("failed to rename temp file: %v", err)
-	}
-
-	return nil
+	ofile.Close()
 }
 
-func WorkerHealthCheck() {
-	for {
-		time.Sleep(1 * time.Second)
-		args := HealthCheckArgs{
-			WorkerID: currentWorkerID,
-		}
-		reply := HealthCheckReply{}
-		ok := call("Coordinator.HealthCheckWorker", &args, &reply)
-		if !ok {
-			return
-		}
-	}
-}
+// example function to show how to make an RPC call to the coordinator.
+//
+// the RPC argument and reply types are defined in rpc.go.
+// func CallExample() {
 
-func CallFailTask(t TaskType, name string, reason string) {
-	args := FailTaskArgs{
-		Name:     name,
-		Type:     t,
-		WorkerID: currentWorkerID,
-		Reason:   reason,
-	}
-	reply := FailTaskReplyArgs{}
-	call("Coordinator.FailTask", &args, &reply)
-}
+// 	// declare an argument structure.
+// 	args := ExampleArgs{}
+
+// 	// fill in the argument(s).
+// 	args.X = 99
+
+// 	// declare a reply structure.
+// 	reply := ExampleReply{}
+
+// 	// send the RPC request, wait for the reply.
+// 	// the "Coordinator.Example" tells the
+// 	// receiving server that we'd like to call
+// 	// the Example() method of struct Coordinator.
+// 	ok := call("Coordinator.Example", &args, &reply)
+// 	if ok {
+// 		// reply.Y should be 100.
+// 		fmt.Printf("reply.Y %v\n", reply.Y)
+// 	} else {
+// 		fmt.Printf("call failed!\n")
+// 	}
+// }
 
 // function call to get a task from coordinator
 func CallGetTask() (*GetTaskReply, error) {
-	args := GetTaskArgs{
-		WorkerID: currentWorkerID,
-	}
+	args := GetTaskArgs{}
 	reply := GetTaskReply{}
 
 	ok := call("Coordinator.GetTask", &args, &reply)
@@ -292,37 +287,16 @@ func CallUpdateTaskStatus(tasktype TaskType, name string, workeraddress string) 
 		Name:          name,
 		Type:          tasktype,
 		WorkerAddress: workeraddress,
-		WorkerID:      currentWorkerID,
 	}
 
 	reply := UpdateTaskStatusReply{}
 	ok := call("Coordinator.UpdateTaskStatus", &args, &reply)
 	if ok {
-		// log.Printf("call with these args: %s, %s, %s", name, tasktype, workeraddress)
+		log.Printf("call with these args: %s, %s, %s", name, tasktype, workeraddress)
 		return nil
 	} else {
 		return errors.New("call failed")
 	}
-}
-
-func CallRegister(address string) (int, error) {
-	args := RegisterArgs{
-		WorkerAddress: address,
-	}
-	reply := RegisterReplyArgs{}
-	if call("Coordinator.Register", &args, &reply) {
-		return reply.WorkerID, nil
-	}
-	return -1, errors.New("register failed")
-}
-
-func CallReportFailure(mapTaskIndex int) {
-	args := ReportFailureArgs{
-		WorkerID:     currentWorkerID,
-		MapTaskIndex: mapTaskIndex,
-	}
-	reply := ReportFailureReply{}
-	call("Coordinator.ReportMapWorkerFailure", &args, &reply)
 }
 
 // send an RPC request to the coordinator, wait for the response.
