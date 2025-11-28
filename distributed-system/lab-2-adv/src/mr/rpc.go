@@ -44,6 +44,14 @@ type HealthCheckReply struct {
 	Acknowledge bool
 }
 
+type FailedTaskReportArgs struct {
+	WorkerAddress string
+}
+
+type FailedTaskReportReply struct {
+	Acknowledge bool
+}
+
 var (
 	mapType    TaskType = "map"
 	reduceType TaskType = "reduce"

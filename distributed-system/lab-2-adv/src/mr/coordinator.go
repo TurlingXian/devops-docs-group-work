@@ -80,7 +80,6 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 		}
 	}
 
-	// check map task
 	if c.mapRemaining != 0 {
 		// check if we still have map task in the queue
 		mapTask, numberOfMapTask := c.GetMapTask()
@@ -170,6 +169,7 @@ func (c *Coordinator) Rescheduler() {
 						// if the task was running too long, assume that we have 10
 						// log.Printf("Rescheduling a task with name '%s', type of this task '%s'.", task, mapType)
 						c.mapTasks[task].status = unstarted
+						c.mapTasks[task].assignedWorker = ""
 						c.cond.Broadcast() // signal the GetTask function, the Wait() function
 					}
 				}
@@ -185,6 +185,7 @@ func (c *Coordinator) Rescheduler() {
 					if different > timeOutCoefficient*time.Second { // double check for the time, if not specified the second -> take nanosecond -> extremely fast -> create redundant tasks
 						// log.Printf("Rescheduling a task with name '%s', type of this task '%s'.", task, reduceType)
 						c.reduceTasks[task].status = unstarted
+						c.reduceTasks[task].assignedWorker = ""
 						c.cond.Broadcast()
 					}
 				}
@@ -203,23 +204,49 @@ func (c *Coordinator) HealthCheck(args *HealthCheckArgs, reply *HealthCheckReply
 	c.cond.L.Lock()
 	defer c.cond.L.Unlock()
 
-	for address, w := range c.workerMap {
-		if address == args.WorkerAddress {
-			// log.Printf("worker %s sent heartbeat, time: %v", address, w.LastReportedTime)
-			w.LastReportedTime = args.LastUpTime
-			w.WorkerDown = false
+	if worker, ok := c.workerMap[args.WorkerAddress]; ok {
+		worker.LastReportedTime = time.Now()
+		worker.WorkerDown = false
+	} else {
+		c.workerMap[args.WorkerAddress] = &WorkerInfor{
+			WorkerAddress:    args.WorkerAddress,
+			LastReportedTime: time.Now(),
+			WorkerDown:       false,
 		}
-	}
-
-	c.workerMap[args.WorkerAddress] = &WorkerInfor{
-		WorkerAddress:    args.WorkerAddress,
-		LastReportedTime: time.Now(),
-		WorkerDown:       false,
 	}
 
 	// log.Printf("new worker sent heartbeat, address %s, time: %v", c.workerMap[args.WorkerAddress].WorkerAddress, c.workerMap[args.WorkerAddress].LastReportedTime)
 
 	reply.Acknowledge = true
+	return nil
+}
+
+func (c *Coordinator) ReportFailure(args *FailedTaskReportArgs, reply *FailedTaskReportReply) error {
+	c.cond.L.Lock()
+	defer c.cond.L.Unlock()
+
+	failedWorker := args.WorkerAddress
+	for _, task := range c.mapTasks {
+		// map first
+		if task.assignedWorker == failedWorker {
+			prevStatus := task.status
+			task.status = unstarted
+			task.assignedWorker = ""
+			task.startTime = time.Time{}
+			if prevStatus == completed {
+				c.mapRemaining++
+			}
+		}
+	}
+	for _, task := range c.reduceTasks {
+		if task.assignedWorker == failedWorker {
+			task.status = unstarted
+			task.assignedWorker = ""
+			task.startTime = time.Time{}
+		}
+	}
+
+	c.cond.Broadcast()
 	return nil
 }
 

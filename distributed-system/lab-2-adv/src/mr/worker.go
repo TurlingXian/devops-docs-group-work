@@ -6,14 +6,11 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
-	"io/fs"
 	"log"
 	"net"
 	"net/http"
 	"net/rpc"
 	"os"
-	"path/filepath"
-	"regexp"
 	"sort"
 	"sync"
 	"time"
@@ -194,14 +191,14 @@ func Worker(mapf func(string, string) []KeyValue,
 			// if get a map task, execute then call update
 			ExecuteMapTask(rep.Name, rep.Number, rep.PartitionNumber, mapf)
 			// probe for the filename
-			for i := 0; i < rep.PartitionNumber; i++ {
-				err := ProbleFileExposed(workerAddress, fmt.Sprintf("mr-%d-%d", rep.Number, i))
-				// log.Printf("[Info] Verify file number %d of map worker %d...", i, rep.Number)
-				if err != nil {
-					// log.Printf("[Self-check] Exposed file failed, error %v", err)
-					continue
-				}
-			}
+			// for i := 0; i < rep.PartitionNumber; i++ {
+			// 	err := ProbleFileExposed(workerAddress, fmt.Sprintf("mr-%d-%d", rep.Number, i))
+			// 	// log.Printf("[Info] Verify file number %d of map worker %d...", i, rep.Number)
+			// 	if err != nil {
+			// 		// log.Printf("[Self-check] Exposed file failed, error %v", err)
+			// 		continue
+			// 	}
+			// }
 			CallUpdateTaskStatus(mapType, rep.Name, workerAddress)
 		} else {
 			ExecuteReduceTask(rep.Number, reducef, rep.MapAddresses)
@@ -211,26 +208,26 @@ func Worker(mapf func(string, string) []KeyValue,
 }
 
 // helper function to look for all the matching file (reduce looks for files created by map)
-func WalkDir(root string, reduceNumber int) ([]string, error) {
-	var files []string
-	// search for partition number
-	pattern := fmt.Sprintf(`mr-\d+-%d$`, reduceNumber)
-	reg, err := regexp.Compile(pattern)
-	if err != nil {
-		return nil, err // error happened, return NULL
-	}
+// func WalkDir(root string, reduceNumber int) ([]string, error) {
+// 	var files []string
+// 	// search for partition number
+// 	pattern := fmt.Sprintf(`mr-\d+-%d$`, reduceNumber)
+// 	reg, err := regexp.Compile(pattern)
+// 	if err != nil {
+// 		return nil, err // error happened, return NULL
+// 	}
 
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if d.IsDir() {
-			return nil
-		}
-		if reg.Match([]byte(d.Name())) {
-			files = append(files, path)
-		}
-		return nil
-	})
-	return files, err
-}
+// 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+// 		if d.IsDir() {
+// 			return nil
+// 		}
+// 		if reg.Match([]byte(d.Name())) {
+// 			files = append(files, path)
+// 		}
+// 		return nil
+// 	})
+// 	return files, err
+// }
 
 // function for map worker
 func ExecuteMapTask(filename string, mapNumber, numberofReduce int, mapf func(string, string) []KeyValue) {
