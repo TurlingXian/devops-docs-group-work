@@ -90,6 +90,10 @@ func FetchData(mapWorkerAddress []string, partition int) ([]KeyValue, error) {
 	fetchedData := make([]KeyValue, 0)
 	errChan := make(chan error, len(mapWorkerAddress))
 
+	client := http.Client{
+		Timeout: 2 * time.Second,
+	}
+
 	for i, address := range mapWorkerAddress {
 		if address == "" {
 			continue
@@ -102,28 +106,20 @@ func FetchData(mapWorkerAddress []string, partition int) ([]KeyValue, error) {
 			filename := fmt.Sprintf("mr-%d-%d", index, partition)
 			fileurl := fmt.Sprintf("%s/%s", addr, filename)
 
-			client := http.Client{
-				Timeout: 2 * time.Second,
-			}
 			resp, err := client.Get(fileurl)
 			if err != nil {
-				// log.Printf("[ERROR][Reduce worker] Worker %s is not reachable: %v", addr, err)
-				ok, err := CallFailureTask(addr)
-				if !ok {
-					errChan <- err
-				}
-				// errChan <- fmt.Errorf("map worker %d is unreachable", index)
+				go func(badAddr string) {
+					CallFailureTask(badAddr)
+				}(addr)
+				errChan <- fmt.Errorf("map worker %s unreachable", addr)
 				return
 			}
 			defer resp.Body.Close()
 			if resp.StatusCode != http.StatusOK {
-				// log.Printf("[ERROR][HTTP] Code %d from %s", resp.StatusCode, addr)
-				// call report failure
-				ok, err := CallFailureTask(addr)
-				if !ok {
-					errChan <- err
-				}
-				// errChan <- fmt.Errorf("map worker %d is missing", index)
+				go func(badAddr string) {
+					CallFailureTask(badAddr)
+				}(addr)
+				errChan <- fmt.Errorf("map worker %s returned %d", addr, resp.StatusCode)
 				return
 			}
 			var localData []KeyValue
@@ -135,13 +131,10 @@ func FetchData(mapWorkerAddress []string, partition int) ([]KeyValue, error) {
 					if err == io.EOF {
 						break
 					}
-					// log.Printf("[ERROR][JSON] Corrupt data from file %s: %v", fileurl, err)
-					// report
-					ok, err := CallFailureTask(addr)
-					if !ok {
-						errChan <- err
-					}
-					// errChan <- fmt.Errorf("corrupt data map %d", index)
+					go func(badAddr string) {
+						CallFailureTask(badAddr)
+					}(addr)
+					errChan <- err
 					return
 				}
 				localData = append(localData, kv)
@@ -201,15 +194,6 @@ func Worker(mapf func(string, string) []KeyValue,
 		if rep.Type == mapType {
 			// if get a map task, execute then call update
 			ExecuteMapTask(rep.Name, rep.Number, rep.PartitionNumber, mapf)
-			// probe for the filename
-			// for i := 0; i < rep.PartitionNumber; i++ {
-			// 	err := ProbleFileExposed(workerAddress, fmt.Sprintf("mr-%d-%d", rep.Number, i))
-			// 	// log.Printf("[Info] Verify file number %d of map worker %d...", i, rep.Number)
-			// 	if err != nil {
-			// 		// log.Printf("[Self-check] Exposed file failed, error %v", err)
-			// 		continue
-			// 	}
-			// }
 			CallUpdateTaskStatus(mapType, rep.Name, workerAddress)
 		} else {
 			ExecuteReduceTask(rep.Number, reducef, rep.MapAddresses)
@@ -217,28 +201,6 @@ func Worker(mapf func(string, string) []KeyValue,
 		}
 	}
 }
-
-// helper function to look for all the matching file (reduce looks for files created by map)
-// func WalkDir(root string, reduceNumber int) ([]string, error) {
-// 	var files []string
-// 	// search for partition number
-// 	pattern := fmt.Sprintf(`mr-\d+-%d$`, reduceNumber)
-// 	reg, err := regexp.Compile(pattern)
-// 	if err != nil {
-// 		return nil, err // error happened, return NULL
-// 	}
-
-// 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-// 		if d.IsDir() {
-// 			return nil
-// 		}
-// 		if reg.Match([]byte(d.Name())) {
-// 			files = append(files, path)
-// 		}
-// 		return nil
-// 	})
-// 	return files, err
-// }
 
 // function for map worker
 func ExecuteMapTask(filename string, mapNumber, numberofReduce int, mapf func(string, string) []KeyValue) {
@@ -284,50 +246,10 @@ func ExecuteMapTask(filename string, mapNumber, numberofReduce int, mapf func(st
 
 // function for reduce worker
 func ExecuteReduceTask(partitionNumber int, reducef func(string, []string) string, mapWorkerAddress []string) {
-	// fetch the filename
-	// client := http.Client{
-	// 	Timeout: 2 * time.Second,
-	// }
 	data, err := FetchData(mapWorkerAddress, partitionNumber)
 	if err != nil {
 		log.Printf("[ERROR][Worker] FetchData failed: %v", err)
 	}
-
-	//filenames, _ := WalkDir("./", partitionNumber) // look for current directory of all file with reduceNumber pattern
-	//data := make([]KeyValue, 0)
-	// for _, filename := range filenames {
-	// 	file, err := os.Open(filename)
-	// 	if err != nil {
-	// 		log.Fatalf("Cannot open file %v, error %s", filename, err)
-	// 	}
-	// 	content, err := io.ReadAll(file)
-	// 	if err != nil {
-	// 		log.Fatalf("Cannot read %v, error %s", filename, err)
-	// 	}
-	// 	file.Close()
-
-	// 	// this split string got an error of unexpected EOF in test (wc test)
-	// 	kvstrings := strings.Split(string(content), "\n")
-	// 	// kv := KeyValue{}
-	// 	for _, kvstring := range kvstrings {
-	// 		// trimmed the whitespace, end character,...
-	// 		trimmed := strings.TrimSpace(kvstring)
-	// 		if len(trimmed) == 0 {
-	// 			// skip empty line
-	// 			continue
-	// 		}
-	// 		kv := KeyValue{} // allow the kv to get rid of garbage values
-	// 		err := json.Unmarshal([]byte(trimmed), &kv)
-	// 		if err != nil {
-	// 			log.Fatalf("Cannot unmarshal %v, error %s", filename, err)
-	// 		}
-	// 		data = append(data, kv)
-	// 	}
-	// }
-
-	// if len(data) != len(testdata) {
-	// 	log.Printf("[ERROR][Fetch failed] Walkdir found %d records while fetch found %d", len(data), len(testdata))
-	// }
 
 	sort.Sort(ByKey(data))
 

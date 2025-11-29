@@ -159,15 +159,12 @@ func (c *Coordinator) HealthMonitor() {
 		c.cond.L.Lock()
 
 		for addr, worker := range c.workerMap {
-			if worker.WorkerDown {
-				continue
-			}
 			if time.Since(worker.LastReportedTime) > 10*time.Second {
 				HardReset(c, addr)
 				SoftReset(c, addr)
+				delete(c.workerMap, addr)
 			}
 		}
-
 		c.cond.L.Unlock()
 	}
 }
@@ -241,10 +238,6 @@ func (c *Coordinator) HealthCheck(args *HealthCheckArgs, reply *HealthCheckReply
 }
 
 func HardReset(c *Coordinator, failedWorker string) {
-	/**This function is to reset the map task, which must
-	  be handled carefully depends on its status
-
-	*/
 	for _, task := range c.mapTasks {
 		if task.assignedWorker == failedWorker {
 			prevStatus := task.status
