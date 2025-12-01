@@ -1,278 +1,318 @@
+>[! Requirements]
+>Your program now runs on a single machine. Now, distribute your program to run on multiple machines (we recommend following the [MapReduce paper](http://research.google.com/archive/mapreduce-osdi04.pdf)
+Your choice on the cloud, lab computers, or your own machines. You are not allowed to use a shared file system such as EFS.
 
-This is the file directory of this project. The implemented of `coordinator` and `worker` alongside with a `rpc` method for inter-communication.
-```Bash
-❯ ls -la mr/
-.
-├── coordinator.go
-├── rpc.go
-├── wc.so
-└── worker.go
+For full points, your solution should:
+
+- Store intermediate files at the worker whom produced them.
+- Use RPC (or similar) to communicate between processes.
+- Handle worker failures and delays in a sane way. Try recovering from errors, but also not doing excessive duplicate work, as for the tests in the basic part.
+- At least detect a coordinator failure.
+
+# 1. How to run?
+
+Need at least 3 machines for better illustration. 1 for coordinator and 2 for workers. Copy all the code, then compile with `-race` flag to detect race condition.
+```bash
+~\lab2\src\main
+# The working directory should contains these files
+❯ ls
+diskvd.go  mrcoordinator     mrworker     pg-being_ernest.txt  pg-huckleberry_finn.txt  test-mr-many.sh
+lockc.go   mrcoordinator.go  mrworker.go  pg-dorian_gray.txt   pg-metamorphosis.txt     test-mr.sh
+lockd.go   mrsequential      pbc.go       pg-frankenstein.txt  pg-sherlock_holmes.txt   viewd.go
+mr-tmp     mrsequential.go   pbd.go       pg-grimm.txt         pg-tom_sawyer.txt
+# build a fresh version of worker, coordinator and rpc
+go build -race -buildmode=plugin ../mrapps/wc.go
 ```
-
-To run this project (inside the main function), we should compile it as a plugin
-```Bash
-❯ mr/ # inside the mr directory
-go build -race -buildmode=plugin ../mrapps/wc.so
+To be able to build with the `-race` detector, using:
+```bash
+export GORACE=1
 ```
-This will put all these `.go` file and build them into `wc.so`, a socket that contains all necessary instruction for coor, worker and rpc.
-A little trick is, because the instruction told us to run the worker with `-race` flag, its socket must be built by passing `-race` flag too, otherwise it can have error `cannot load plugin`
-
-Run the coordinator first, pass a list of file name that you want to run the word count:
+Run the coordinator in a machine:
 ```Bash
+# specify the address of the coordinator (within LAN)
+export COORDINATOR_HOST=<Private_ip>:<Port>
+# run the coordinator with tasks
 go run -race mrcoordinator.go pg-*.txt
 ```
-It will create X tasks, X is equal to total number of file which name has "pg-".
-In another terminal, run a worker:
+With the workers:
 ```Bash
-go run -race mworker.go wc.so
+# specify the address of the coordinator (within LAN), used the coordinator IP
+export COORDINATOR_HOST=<Private_ip>:<Port>
+# run the worker
+go run -race mrworker.go wc.so
 ```
-If you want to run multiple workers, open as many terminal as you want and run.
+The Coordinator will distribute tasks for the worker, worker completes the task, then uploads these results to coordinator, which will assemble all the files to product a single file with name `mr-wc-all`. This file can be used in the comparison with the result produced from `go run mrsequential.go wc.so pg*.txt`.
 
-## Implementation
-### The coordinator
+# 2. Details
+## 2.1. A heartbeat approach
+Each worker will send heartbeat to coordinator frequently. On the coordinator side, there is a function to handle the Health Check. To do this, coordinator must have a map, map a worker name with that worker's information:
 ```Go
-type Coordinator struct {
-    // Your definitions here.
-    mapTasks        map[string]*TaskMetadata // a map of map task
-    reduceTasks     map[string]*TaskMetadata //a map of reduce task
-    cond            *sync.Cond               //condition variable (mutex)
-    mapRemaining    int
-    reduceRemaining int
-    numbeOfReduce   int // number of "reduce" workes, used in pair with partition key
+type WorkerInfor struct {
+    WorkerAddress    string
+    LastReportedTime time.Time
+    WorkerDown       bool
 }
 ```
-There are several attributes for a coordinator:
-- The list of map task that should be run.
-- The list of reduce task.
-- A conditional variable (mutex) to protect the shared data (two lists above) from race condition when multiple workers try to get task.
-- Number of map and reduce task remaining (the length of the list maybe not match with the remaining, because in that time, a task is till on progress, hence not counted as finished).
-- Number of reduce worker. Normally, this number is far less than number of map workers.
-
-The task metadata is just a data of a task, it is essentially to include these properties: name, type, status and time.
+Each worker has some essential information: the address (since we need to expose the address for the reduce phase), the last time it reported health to coordinator and a True/False indication if that worker is operating or not.
+Upon receiving a heartbeat, the coordinator will update the `LastReportedTime` if that worker is already in list, or registering a new one if not:
 ```Go
-type Status string // indicate the status, done, undone,...
+func (c *Coordinator) HealthCheck(args *HealthCheckArgs, reply *HealthCheckReply) error {
+    c.cond.L.Lock()
+    defer c.cond.L.Unlock()
 
-  
-type TaskMetadata struct {
-    number    int // the sequence number to mark a task, i.e: taks 1-1, task 1-2 (task 1, partition 1, task 1 partition 2)
-    startTime time.Time
-    status    Status
-}
-```
-
-A coordinator should be able to fetch the task list (both list) then distributes to workers. But because reduce is the predecessor of the map, so map must be check first. The coordinator should check for map list first, then, reduce list.
-```Go
-    if c.mapRemaining != 0 {
-        // check if we still have map task in the queue
-        mapTask, numberOfMapTask := c.GetMapTask()
-        for mapTask == "" { // the queue is empty
-            if c.mapRemaining == 0 { // no job
-                break
-            }
-            // still have job
-            c.cond.Wait() // wait for accquiring the lock
-            mapTask, numberOfMapTask = c.GetMapTask()
-        }
-        if mapTask != "" { // have somthing in the queue
-            reply.Name = mapTask                    // name of the task
-            reply.Number = numberOfMapTask          // total number of tasks
-            reply.Type = mapType                    // type of task, of course it is map
-            reply.PartitionNumber = c.numbeOfReduce // number of partition to assign
-            c.cond.L.Unlock()                       // complete the critical selection
-            return nil
+    if worker, ok := c.workerMap[args.WorkerAddress]; ok {
+        worker.LastReportedTime = time.Now()
+        worker.WorkerDown = false
+    } else {
+        c.workerMap[args.WorkerAddress] = &WorkerInfor{
+            WorkerAddress:    args.WorkerAddress,
+            LastReportedTime: time.Now(),
+            WorkerDown:       false,
         }
     }
+    reply.Acknowledge = true
+    return nil
+}
 ```
-If the queue is empty, but still have map job remain, must wait till the map is done. Once every map tasks are done, the reduce can begin. Otherwise, fetch and write a reply to worker.
-
-The coordinator also has a mechanism to reschedule task if it consumed too many time (hanging forever, fault,...)
-
+For this purpose, there are 2 new structs (RPC):
 ```Go
-func (c *Coordinator) Rescheduler() {
-    for {
-        time.Sleep(100 * time.Millisecond) // avoid the "spinning" logic ~ busy wait
-        c.cond.L.Lock()                    // if we want to change, better accquired the lock first
-        if c.mapRemaining != 0 {
-            for task := range c.mapTasks {
-                currentTime := time.Now().UTC()
-                startTime := c.mapTasks[task].startTime
-                status := c.mapTasks[task].status
-                if status == inprogress {
-                    different := currentTime.Sub(startTime)
-                    if different > timeOutCoefficient*time.Second {
-                        // if the task was running too long, assume that we have 10
-                        // log.Printf("Rescheduling a task with name '%s', type of this task '%s'.", task, mapType)
-                        c.mapTasks[task].status = unstarted
-                        c.cond.Broadcast() // signal the GetTask function, the Wait() function
-                    }
-                }
-            }
-        } else if c.reduceRemaining != 0 {
-            c.cond.Broadcast() // signal the fetch (GetTask) to get reduce task or wait,...
-            for task := range c.reduceTasks {
-                currentTime := time.Now().UTC()
-                startTime := c.reduceTasks[task].startTime
-                status := c.reduceTasks[task].status
-                if status == inprogress {
-                    different := currentTime.Sub(startTime)
-                    if different > timeOutCoefficient*time.Second { // double check for the time, if not specified the second -> take nanosecond -> extremely fast -> create redundant tasks
-                        // log.Printf("Rescheduling a task with name '%s', type of this task '%s'.", task, reduceType)
-                        c.reduceTasks[task].status = unstarted
-                        c.cond.Broadcast()
-                    }
-                }
-            }
-        } else {
-            c.cond.Broadcast() // if no task remains, then broadcast too
-            c.cond.L.Unlock()  // end the accessing shared database
-            break
-        }
-        c.cond.L.Unlock() // simply unlock
+type HealthCheckArgs struct {
+    WorkerAddress string
+    LastUpTime    time.Time
+}
+ 
+type HealthCheckReply struct {
+    Acknowledge bool
+}
+```
+Each time worker tries to send the heartbeat, it relies on the Acknowledge to determine if it reported successfully or not.
+```Go
+func CallHealthCheck(addr string) (bool, error) {
+    args := HealthCheckArgs{
+        WorkerAddress: addr,
+        LastUpTime:    time.Now(),
+
+    }
+    reply := HealthCheckReply{}
+    ok := call("Coordinator.HealthCheck", &args, &reply)
+    if ok {
+        return reply.Acknowledge, nil
+    } else {
+        return false, errors.New("call falied")
     }
 }
 ```
-
-### The RPC
- Remote Produce Call is a communication method, in this scenario, it should include the name, the number of the task (to be indexed in the map phase) as well as the partition number (how many reduce workers)
- ```Go
-type GetTaskArgs struct {
-}
- 
-type TaskType string // represent tasktype, either map or reduce task
- 
+## 2.2 Handle the files in the distributed environment
+In this model, map and reduce worker are not in the same machine, so each worker must expose itself as a fileserver, sends its address when replying to the coordinator (construct an address book). With this additional information, when reduce phase is started, the reduce worker can know where to find the file.
+First, when a worker started to work, also exposed itself (and also performed regular health check with coordinator):
+```Go
+func Worker(mapf func(string, string) []KeyValue,
+    reducef func(string, []string) string) {
+    // exposed self
+    workerAddress := StartHTTPFileServer(".")
+    if workerAddress == "" {
+        return
+    }
+    // regular health check
+    go func() {
+        ticker := time.NewTicker(500 * time.Millisecond)
+        defer ticker.Stop()
+        for range ticker.C {
+            _, err := CallHealthCheck(workerAddress)
+            if err != nil {
+                log.Fatal(err)
+            }
+        }
+    }()
+```
+Because the coordinator must know workers that executed map tasks, the worker also needs to contain its address in the Update method `CallUpdateTaskStatus(mapType, rep.Name, workerAddress)`. The reply should contain these information:
+In RPC
+```Go
 type GetTaskReply struct {
     Name            string // the name of file that acts as the input
     Number          int    // task number (to be refferred each phases, not to be confused with partition ID to put to reduce)
     PartitionNumber int    // partition number, to match with which reducer will take it
     Type            TaskType
+    MapAddresses    []string // used to store all map workers addresses
 }
- 
-type UpdateTaskStatusArgs struct {
-    Name string
-    Type TaskType
-}
-  
-type UpdateTaskStatusReply struct {
-}
- ```
-
-The empty structs are to satisfy the `net/rpc` requirements
-
-### The worker
-
-First is the map task
+```
+In the `CallUpdateTaskStatus`:
 ```Go
-// function for map worker
-
-func ExecuteMapTask(filename string, mapNumber, numberofReduce int, mapf func(string, string) []KeyValue) {
-    file, err := os.Open(filename)
-    if err != nil {
-        log.Fatalf("Cannot open %v", filename)
+func CallUpdateTaskStatus(tasktype TaskType, name string, workeraddress string) error {
+    args := UpdateTaskStatusArgs{
+        Name:          name,
+        Type:          tasktype,
+        WorkerAddress: workeraddress,
     }
-
-    content, err := io.ReadAll(file)
-    if err != nil {
-        log.Fatalf("Cannot read %v", filename)
-    }
-
-    file.Close()
-    initVal := mapf(filename, string(content)) // map the filename with its content
-    mp := map[int]*os.File{}                   // map of output result (cache)
-    for _, kv := range initVal {
-        // check for each "word"
-        currentParition := ihash(kv.Key) % numberofReduce
-        f, ok := mp[currentParition]
-
-        if !ok {
-            // create new "bucket" if the word is not existed
-            f, err = os.CreateTemp("", "tmp")
-            mp[currentParition] = f
-            if err != nil {
-                log.Fatal(err)
-            }
-        }
-
-        kvj, _ := json.Marshal(kv)
-        // fmt.Fprint(f, "%v\n", kvj)
-        fmt.Fprintf(f, "%s\n", kvj)
-
-    }
-  
-    // rename for the reduce phase
-    for rNum, f := range mp {
-        os.Rename(f.Name(), fmt.Sprintf("mr-%d-%d", mapNumber, rNum))
+    reply := UpdateTaskStatusReply{}
+    ok := call("Coordinator.UpdateTaskStatus", &args, &reply)
+    if ok {
+        // log.Printf("call with these args: %s, %s, %s", name, tasktype, workeraddress)
+        return nil
+    } else {
+        return errors.New("call failed")
     }
 }
 ```
-Fetch the big file first, open it and consume it, with the help of `mapf` function, change the big body of text (whole file) into words. Then based on the hash function (the `ihash`) it will split these massive list of k-v ("word" - "1") into partition, then be processed by the reduce worker. The line `mp := map[int]*os.File{}` is for creating and mapping file with correct partition number. Finally, we rename it for the next step.
-
-Second is the reduce task
+And the Coordinator also handles the worker:
 ```Go
-func ExecuteReduceTask(partitionNumber int, reducef func(string, []string) string) {
-    // fetch the filename
-    filenames, _ := WalkDir("./", partitionNumber) // look for current directory of all file with reduceNumber pattern
-    data := make([]KeyValue, 0)
-    for _, filename := range filenames {
-        file, err := os.Open(filename)
-        if err != nil {
-            log.Fatalf("Cannot open file %v, error %s", filename, err)
+func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
+    c.cond.L.Lock() // lock the conditional variable when accessing shared variable
+    // in the get task, include a map of dictonary book
+    locations := make([]string, len(c.mapTasks))
+    for name, taskMetaData := range c.mapTasks {
+        if name != "" && taskMetaData.assignedWorker != "" {
+            locations[taskMetaData.number] = taskMetaData.assignedWorker
         }
+    }
+    ...
+```
+To reduced the update overhead, each time a worker requests a task successfully, the coordinator also update the assigned worker (to know a tasks executed by which worker), included a list in the reply.
+```Go
+// inside MapType
+...
+            reply.MapAddresses = locations                          // address book
+            c.mapTasks[mapTask].assignedWorker = args.WorkerAddress //
+...
+```
+## 2.3. Fetching files from multiple sources.
+In a scenario, if there are 100 workers, and they are reused for reduce task, maybe the reducer must loop through all 100 workers, to decrease time, using a remote fetching methods with multiple routines:
+```Go
+func FetchData(mapWorkerAddress []string, partition int) ([]KeyValue, error) {
+    var wg sync.WaitGroup
+    var mu sync.Mutex
 
-        content, err := io.ReadAll(file)
-        if err != nil {
-            log.Fatalf("Cannot read %v, error %s", filename, err)
+    fetchedData := make([]KeyValue, 0)
+    errChan := make(chan error, len(mapWorkerAddress))
 
+    client := http.Client{
+        Timeout: 2 * time.Second,
+    }
+
+    for i, address := range mapWorkerAddress {
+        if address == "" {
+            continue
         }
-        file.Close()
-
-  
-
-        // this split string got an error of unexpected EOF in test (wc test)
-        kvstrings := strings.Split(string(content), "\n")
-        // kv := KeyValue{}
-        for _, kvstring := range kvstrings {
-            // trimmed the whitespace, end character,...
-            trimmed := strings.TrimSpace(kvstring)
-            if len(trimmed) == 0 {
-                // skip empty line
-                continue
-            }
-
-            kv := KeyValue{} // allow the kv to get rid of garbage values
-            err := json.Unmarshal([]byte(trimmed), &kv)
+        wg.Add(1)
+        go func(index int, addr string) {
+            defer wg.Done()
+            filename := fmt.Sprintf("mr-%d-%d", index, partition)
+            fileurl := fmt.Sprintf("%s/%s", addr, filename)
+            resp, err := client.Get(fileurl)
             if err != nil {
-                log.Fatalf("Cannot unmarshal %v, error %s", filename, err)
-                // weaker error catching logic
-                // log.Printf("Warning: Cannot unmarshal line: %q, error: %v", trimmed, err)
-                // continue
+                go func(badAddr string) {
+                    log.Printf("Failed worker %s", badAddr)
+                    CallFailureTask(badAddr)
+                }(addr)
+                errChan <- fmt.Errorf("map worker %s unreachable", addr)
+                return
             }
-            data = append(data, kv)
+
+            defer resp.Body.Close()
+            if resp.StatusCode != http.StatusOK {
+                go func(badAddr string) {
+                    log.Printf("Failed worker %s", badAddr)
+                    CallFailureTask(badAddr)
+                }(addr)
+                errChan <- fmt.Errorf("map worker %s returned %d", addr, resp.StatusCode)
+                return
+            }
+
+            var localData []KeyValue
+            decoder := json.NewDecoder(resp.Body)
+            for {
+                var kv KeyValue
+                if err := decoder.Decode(&kv); err != nil {
+                    if err == io.EOF {
+                        break
+                    }
+                    go func(badAddr string) {
+                        log.Printf("Failed worker %s", badAddr)
+                        CallFailureTask(badAddr)
+                    }(addr)
+                    errChan <- err
+                    return
+                }
+                localData = append(localData, kv)
+            }
+            mu.Lock()
+            fetchedData = append(fetchedData, localData...)
+            mu.Unlock()
+        }(i, address)
+    }
+
+    wg.Wait()
+    close(errChan)
+    for err := range errChan {
+        if err != nil {
+            return nil, err
         }
     }
-  
-    sort.Sort(ByKey(data))
-    oname := fmt.Sprintf("mr-out-%d", partitionNumber)
-    ofile, _ := os.Create(oname)
-    i := 0
-
-    for i < len(data) {
-        j := i + 1
-        for j < len(data) && data[j].Key == data[i].Key {
-            j++
-        }
-        values := []string{}
-        for k := i; k < j; k++ {
-            values = append(values, data[k].Value)
-        }
-        
-        output := reducef(data[i].Key, values)
-        fmt.Fprintf(ofile, "%v %v\n", data[i].Key, output)
-        i = j
-
-    }
-    ofile.Close()
+    return fetchedData, nil
 }
 ```
-Try to read all the same partitioned file, parse these value, take all same key from files, sort, append the value `{Key: "Apple", Value: "1 1 1 1 1"}`. Finally, reduce all these value to 1 integer number.
+In this method, if fetch file failed, meaning the worker contains necessary files is down. Then, it should be reported to coordinator, then, coordinator will reset all the tasks that are associated with that worker (through property `assignedWorker`).
+```Go
+// failure call
+func CallFailureTask(addr string) (bool, error) {
+    args := FailedTaskReportArgs{
+        WorkerAddress: addr,
+    }
 
-There are several helper function, worker needs to call for task and update the task status for the coordinator.
+    reply := FailedTaskReportReply{}
+    ok := call("Coordinator.ReportFailure", &args, &reply)
+    if ok {
+        return reply.Acknowledge, nil
+    } else {
+        return false, errors.New("call failed")
+    }
+}
+```
+Coordinator handles failure:
+```Go
+func (c *Coordinator) ReportFailure(args *FailedTaskReportArgs, reply *FailedTaskReportReply) error {
+    c.cond.L.Lock()
+    defer c.cond.L.Unlock()
+
+    failedWorker := args.WorkerAddress
+    if w, ok := c.workerMap[failedWorker]; ok {
+        w.WorkerDown = true
+    }
+    log.Printf("Worker reported down %s", failedWorker)
+    HardReset(c, failedWorker) // for map task
+    SoftReset(c, failedWorker) // for reduce task
+    c.cond.Broadcast()
+    return nil
+}
+```
+The hard is for map, if status == `inprogress`, only set to `unstarted`, but if it was completed ago, reset and also plus 1 to the total map remaining task. But the soft reset is for reduce, only set to `unstarted` and then wait to be rescheduled later.
+## 2.4. Running both the Reschedule and Health Check
+```Go
+func MakeCoordinator(files []string, nReduce int) *Coordinator {
+...
+    go c.Rescheduler()
+    go c.HealthMonitor()
+...
+}
+```
+While the `Rescheduler` takes care the task that runs slowly (more than 10 secs), the `HealthMonitor` will reset the tasks if a worker is down (not hearing heartbeat more than 4 secs):
+```Go
+func (c *Coordinator) HealthMonitor() {
+    for {
+        time.Sleep(500 * time.Millisecond)
+        c.cond.L.Lock()
+
+        for addr, worker := range c.workerMap {
+            if time.Since(worker.LastReportedTime) > 4*time.Second {
+                log.Printf("Worker down %s", addr)
+                HardReset(c, addr)
+                SoftReset(c, addr)
+                delete(c.workerMap, addr)
+
+                c.cond.Broadcast()
+            }
+        }
+        c.cond.L.Unlock()
+    }
+}
+```
