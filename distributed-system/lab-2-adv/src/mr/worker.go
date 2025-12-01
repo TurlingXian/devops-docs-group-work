@@ -18,6 +18,8 @@ import (
 )
 
 // for advance feature
+const WorkerCommonPort = 30022
+
 // borrow from mrapps
 type ByKey []KeyValue
 
@@ -34,7 +36,7 @@ type KeyValue struct {
 // helper function to start a fileserver
 func StartHTTPFileServer(rootDirectory string) string {
 	// change to dynamicall assigned port (for local test)
-	listener, err := net.Listen("tcp", ":0")
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", WorkerCommonPort))
 	if err != nil {
 		log.Fatalf("Error encountered: %v", err)
 	}
