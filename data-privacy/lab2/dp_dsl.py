@@ -47,7 +47,7 @@ class DP_DSL:
 
         """
         if budget <=0:
-            raise ValueError(f"A budget must be larger than 0, got {budget}")
+            raise InvalidParameter(f"A budget must be larger than 0, got {budget}")
         self._total = budget
         self._used = 0
 
